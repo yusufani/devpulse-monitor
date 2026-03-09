@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/yusufani/vscode-docker-monitor/compare/v1.0.0...v1.0.1) (2026-03-09)
+
+
+### Bug Fixes
+
+* update VSIX paths in CI workflows to ensure correct artifact handling ([568fbc8](https://github.com/yusufani/vscode-docker-monitor/commit/568fbc8bd4a3a3e226a18367f04bb72c1dc1edb4))
+
 ## 1.0.0 (2026-03-09)
 
 
