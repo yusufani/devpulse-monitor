@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Docker Services Configuration",
+  "description": "Configuration for Docker Monitor extension services panel",
+  "type": "object",
+  "properties": {
+    "categories": {
+      "type": "array",
+      "description": "Service categories for grouping",
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "properties": {
+          "id": { "type": "string", "description": "Unique category identifier" },
+          "label": { "type": "string", "description": "Display label (shown in sidebar)" },
+          "sortOrder": { "type": "number", "description": "Sort order (lower = first)", "default": 0 }
+        }
+      }
+    },
+    "services": {
+      "type": "array",
+      "description": "Service definitions",
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "properties": {
+          "id": { "type": "string", "description": "Unique service identifier" },
+          "label": { "type": "string", "description": "Display name" },
+          "category": { "type": "string", "description": "Category ID this service belongs to" },
+          "dockerService": { "type": "string", "description": "Docker compose service name for status checks" },
+          "composeName": { "type": "string", "description": "Docker compose service name for docker compose up" },
+          "script": { "type": "string", "description": "Path to launch script (relative to workspace root)" },
+          "description": { "type": "string", "description": "Short description shown in sidebar" }
+        }
+      }
+    }
+  }
+}

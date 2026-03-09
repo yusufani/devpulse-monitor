@@ -1,0 +1,13 @@
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+.eslintrc.json
+.prettierrc
+tsconfig.json
+**/*.map
+node_modules/**
+.github/**
+CONTRIBUTING.md
+release-please-config.json
+.release-please-manifest.json

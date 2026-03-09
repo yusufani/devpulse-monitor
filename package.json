@@ -1,0 +1,188 @@
+{
+  "name": "docker-monitor",
+  "displayName": "Docker Monitor",
+  "description": "Real-time GPU, CPU, RAM monitoring with Docker container management for VS Code",
+  "version": "1.0.0",
+  "publisher": "ANISOFT",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yusuf-ani/vscode-docker-monitor"
+  },
+  "extensionKind": ["workspace"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other", "Visualization"],
+  "keywords": ["gpu", "docker", "monitor", "nvidia", "amd", "system", "vram", "cpu", "ram"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Docker Monitor",
+      "properties": {
+        "dockerMonitor.refreshInterval": {
+          "type": "number",
+          "default": 10,
+          "minimum": 2,
+          "description": "Refresh interval in seconds for sidebar monitoring"
+        },
+        "dockerMonitor.webviewRefreshInterval": {
+          "type": "number",
+          "default": 5,
+          "minimum": 2,
+          "description": "Refresh interval in seconds for webview panel"
+        },
+        "dockerMonitor.servicesConfigPath": {
+          "type": "string",
+          "default": ".vscode/docker-services.json",
+          "description": "Path to services configuration file (relative to workspace)"
+        },
+        "dockerMonitor.autoDiscoverServices": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-discover docker-compose files in workspace"
+        },
+        "dockerMonitor.gpuMonitoring": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable GPU monitoring"
+        },
+        "dockerMonitor.dockerBinary": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to docker binary (auto-detected if empty)"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dockerMonitor",
+          "title": "Docker Monitor",
+          "icon": "$(server-process)"
+        }
+      ]
+    },
+    "views": {
+      "dockerMonitor": [
+        {
+          "id": "dockerServices",
+          "name": "Services"
+        },
+        {
+          "id": "gpuMonitor",
+          "name": "System Monitor"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "dockerServices.refresh",
+        "title": "Refresh Service Status",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dockerServices.runService",
+        "title": "Run Service"
+      },
+      {
+        "command": "dockerServices.stopAll",
+        "title": "Stop All Services",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "gpuMonitor.refresh",
+        "title": "Refresh System Monitor",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gpuMonitor.show",
+        "title": "Open GPU Monitor",
+        "icon": "$(window)"
+      },
+      {
+        "command": "gpuMonitor.killProcess",
+        "title": "Kill Process",
+        "icon": "$(close)"
+      },
+      {
+        "command": "gpuMonitor.stopContainer",
+        "title": "Stop Container",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "gpuMonitor.killContainer",
+        "title": "Force Kill Container",
+        "icon": "$(trash)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dockerServices.refresh",
+          "when": "view == dockerServices",
+          "group": "navigation"
+        },
+        {
+          "command": "dockerServices.stopAll",
+          "when": "view == dockerServices",
+          "group": "navigation"
+        },
+        {
+          "command": "gpuMonitor.show",
+          "when": "view == gpuMonitor",
+          "group": "navigation"
+        },
+        {
+          "command": "gpuMonitor.refresh",
+          "when": "view == gpuMonitor",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gpuMonitor.killProcess",
+          "when": "view == gpuMonitor && viewItem == gpuProcess",
+          "group": "inline"
+        },
+        {
+          "command": "gpuMonitor.stopContainer",
+          "when": "view == gpuMonitor && viewItem == gpuContainer",
+          "group": "inline"
+        },
+        {
+          "command": "gpuMonitor.killContainer",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
+        }
+      ]
+    },
+    "jsonValidation": [
+      {
+        "fileMatch": "docker-services.json",
+        "url": "./schemas/docker-services.schema.json"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "lint:fix": "eslint src --ext ts --fix",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "package": "npx @vscode/vsce package --no-dependencies",
+    "publish": "npx @vscode/vsce publish --no-dependencies",
+    "publish:ovsx": "npx ovsx publish *.vsix",
+    "precommit": "npm run lint && npm run typecheck"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "prettier": "^3.2.0"
+  }
+}

@@ -1,0 +1,79 @@
+name: Publish to Marketplace
+
+# Manuel tetikleme — sadece sen butona basınca çalışır
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v1.0.0). Leave empty for latest release."
+        required: false
+        type: string
+      marketplace:
+        description: "Publish to VS Code Marketplace"
+        required: true
+        type: boolean
+        default: true
+      openvsx:
+        description: "Publish to Open VSX Registry"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run compile
+
+      # Determine which tag/version to publish
+      - name: Resolve release tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing release: $TAG"
+
+      # Download VSIX from GitHub Release (already built by release workflow)
+      - name: Download VSIX from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download ${{ steps.resolve.outputs.tag }} --pattern "*.vsix" || {
+            echo "No VSIX found in release, building fresh..."
+            npm run package
+          }
+
+      - name: List VSIX files
+        run: ls -la *.vsix
+
+      # Publish to VS Code Marketplace
+      - name: Publish to VS Code Marketplace
+        if: ${{ inputs.marketplace }}
+        run: npx @vscode/vsce publish --packagePath *.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      # Publish to Open VSX (optional, for VS Codium users)
+      - name: Publish to Open VSX
+        if: ${{ inputs.openvsx }}
+        run: npx ovsx publish *.vsix
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        continue-on-error: true  # Open VSX is nice-to-have, don't fail the whole job

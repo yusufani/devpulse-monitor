@@ -1,0 +1,79 @@
+export interface SystemInfo {
+  cpuPercent: number;
+  memUsedMib: number;
+  memTotalMib: number;
+}
+
+export interface GpuInfo {
+  index: number;
+  name: string;
+  vendor: "nvidia" | "amd" | "apple" | "unknown";
+  memUsed: number;
+  memTotal: number;
+  memFree: number;
+  util: number;
+  temp: number;
+  power: number;
+}
+
+export interface GpuProcess {
+  pid: number;
+  gpuIndex: number;
+  memMib: number;
+  processName: string;
+  containerId: string;
+  containerName: string;
+  cmdline: string;
+  cwd: string;
+  cpuPercent: number;
+  ramMib: number;
+  uid: number;
+  username: string;
+}
+
+export interface ContainerStats {
+  cpuPercent: number;
+  memUsedMib: number;
+  memLimitMib: number;
+  memPercent: number;
+}
+
+export interface ContainerFullInfo {
+  id: string;
+  name: string;
+  mainPid: number;
+  ownerUid: number;
+  ownerName: string;
+}
+
+export interface GpuData {
+  gpus: GpuInfo[];
+  processes: GpuProcess[];
+  containerStats: Map<string, ContainerStats>;
+  timestamp: number;
+  error: string;
+}
+
+export interface MonitorData {
+  system: SystemInfo;
+  gpuData: GpuData;
+  containers: ContainerFullInfo[];
+}
+
+export interface ServiceDefinition {
+  id: string;
+  label: string;
+  category?: string;
+  dockerService?: string;
+  composeName?: string;
+  script?: string;
+  description?: string;
+}
+
+export interface ServiceCategory {
+  id: string;
+  label: string;
+  sortOrder: number;
+}
+
+export type ServiceStatus = "running" | "stopped";
