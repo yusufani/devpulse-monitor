@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { SystemInfo, GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo, ServiceDefinition, ServiceStatus } from "../types";
+import { SystemInfo, GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo } from "../types";
 import { fmtMem } from "../utils/format";
 
 // ── User Color Palette ───────────────────────────────────────────
@@ -101,11 +101,17 @@ export class SystemItem extends vscode.TreeItem {
 export class GpuItem extends vscode.TreeItem {
   constructor(public readonly gpu: GpuInfo) {
     const pct = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * 100) : 0;
-    const bar = "\u2588".repeat(Math.round(pct / 10)) + "\u2591".repeat(10 - Math.round(pct / 10));
-    super(`GPU ${gpu.index}: ${gpu.name}`, vscode.TreeItemCollapsibleState.Collapsed);
-    this.description = `${bar} ${pct}% · ${gpu.temp}\u00B0C · ${gpu.util}% util`;
-    this.tooltip = `GPU ${gpu.index}: ${gpu.name}\nVRAM: ${fmtMem(gpu.memUsed)} / ${fmtMem(gpu.memTotal)} (${pct}%)\nTemp: ${gpu.temp}\u00B0C\nPower: ${gpu.power.toFixed(0)}W\nUtil: ${gpu.util}%`;
+    super(`GPU ${gpu.index}`, vscode.TreeItemCollapsibleState.Expanded);
+    this.description = `${gpu.name} · ${fmtMem(gpu.memUsed)}/${fmtMem(gpu.memTotal)} · ${gpu.temp}\u00B0C`;
     this.iconPath = new vscode.ThemeIcon("circuit-board", new vscode.ThemeColor(vramColor(pct)));
+
+    const md = new vscode.MarkdownString("", true);
+    md.supportHtml = true;
+    md.isTrusted = true;
+    md.value = `<div style="font-family:monospace"><strong>GPU ${gpu.index}: ${gpu.name}</strong><br>` +
+      `VRAM: ${fmtMem(gpu.memUsed)} / ${fmtMem(gpu.memTotal)} (${pct}%)<br>` +
+      `Temp: ${gpu.temp}\u00B0C · Power: ${gpu.power.toFixed(0)}W · Util: ${gpu.util}%</div>`;
+    this.tooltip = md;
   }
 }
 
@@ -121,61 +127,47 @@ export interface VramSegment {
   vram: number;
 }
 
+export function buildVramTooltip(segments: VramSegment[], totalVram: number, freeMib: number): vscode.MarkdownString {
+  const md = new vscode.MarkdownString("", true);
+  md.supportHtml = true;
+  md.isTrusted = true;
+
+  const usedPct = totalVram > 0 ? Math.round(((totalVram - freeMib) / totalVram) * 100) : 0;
+  const barPx = 260;
+  let html = `<div style="font-family:monospace"><strong>VRAM ${fmtMem(totalVram - freeMib)} / ${fmtMem(totalVram)} (${usedPct}%)</strong>`;
+  html += `<div style="display:flex;width:${barPx}px;height:16px;border:1px solid #666;border-radius:3px;overflow:hidden;margin:4px 0">`;
+  for (const seg of segments) {
+    const w = totalVram > 0 ? Math.max(2, Math.round((seg.vram / totalVram) * barPx)) : 0;
+    html += `<div style="width:${w}px;height:100%;background:${getUserHexColor(seg.username)}"></div>`;
+  }
+  if (freeMib > 0) {
+    html += `<div style="flex:1;height:100%;background:#333"></div>`;
+  }
+  html += `</div>`;
+  for (const seg of segments) {
+    const p = totalVram > 0 ? Math.round((seg.vram / totalVram) * 100) : 0;
+    html += `<div><span style="color:${getUserHexColor(seg.username)}">\u25A0</span> ${seg.username} ${fmtMem(seg.vram)} (${p}%)</div>`;
+  }
+  if (freeMib > 0) {
+    const p = totalVram > 0 ? Math.round((freeMib / totalVram) * 100) : 0;
+    html += `<div><span style="color:#555">\u25A1</span> free ${fmtMem(freeMib)} (${p}%)</div>`;
+  }
+  html += `</div>`;
+  md.value = html;
+  return md;
+}
+
 export class VramMapItem extends vscode.TreeItem {
   constructor(segments: VramSegment[], totalVram: number, freeMib: number) {
-    // Build a single combined bar: filled per user + empty for free
-    const barWidth = 30;
-    let barStr = "";
-    const legendParts: string[] = [];
-    for (const seg of segments) {
-      const blocks = totalVram > 0 ? Math.max(1, Math.round((seg.vram / totalVram) * barWidth)) : 0;
-      barStr += "\u2588".repeat(blocks);
-      legendParts.push(`${seg.username}:${fmtMem(seg.vram)}`);
-    }
-    const freeBlocks = Math.max(0, barWidth - barStr.length);
-    barStr += "\u2591".repeat(freeBlocks);
-
+    const barW = 15;
     const usedPct = totalVram > 0 ? Math.round(((totalVram - freeMib) / totalVram) * 100) : 0;
-    super(`${barStr} ${usedPct}%`, vscode.TreeItemCollapsibleState.None);
-    this.description = legendParts.join(" · ");
-    this.iconPath = new vscode.ThemeIcon("symbol-color-palette", new vscode.ThemeColor(vramColor(usedPct)));
-
-    // Build HTML tooltip with real colored rectangles
-    const md = new vscode.MarkdownString("", true);
-    md.supportHtml = true;
-    md.isTrusted = true;
-
-    const totalBarWidth = 280; // pixels
-    let html = `<div style="font-family:monospace;margin-bottom:6px"><strong>VRAM ${fmtMem(totalVram - freeMib)} / ${fmtMem(totalVram)} (${usedPct}%)</strong></div>`;
-    // Outer bar container
-    html += `<div style="display:flex;width:${totalBarWidth}px;height:22px;border:1px solid #666;border-radius:3px;overflow:hidden">`;
-    for (const seg of segments) {
-      const widthPx = totalVram > 0 ? Math.max(2, Math.round((seg.vram / totalVram) * totalBarWidth)) : 0;
-      const hexColor = getUserHexColor(seg.username);
-      html += `<div style="width:${widthPx}px;height:100%;background:${hexColor}" title="${seg.username}: ${fmtMem(seg.vram)}"></div>`;
-    }
-    // Free space
-    if (freeMib > 0) {
-      const freeWidthPx = totalVram > 0 ? Math.round((freeMib / totalVram) * totalBarWidth) : totalBarWidth;
-      html += `<div style="width:${freeWidthPx}px;height:100%;background:#333" title="free: ${fmtMem(freeMib)}"></div>`;
-    }
-    html += `</div>`;
-
-    // Legend
-    html += `<div style="margin-top:6px;font-family:monospace">`;
-    for (const seg of segments) {
-      const hexColor = getUserHexColor(seg.username);
-      const segPct = totalVram > 0 ? Math.round((seg.vram / totalVram) * 100) : 0;
-      html += `<div><span style="color:${hexColor}">\u2588\u2588</span> ${seg.username}: ${fmtMem(seg.vram)} (${segPct}%)</div>`;
-    }
-    if (freeMib > 0) {
-      const freePct = totalVram > 0 ? Math.round((freeMib / totalVram) * 100) : 0;
-      html += `<div><span style="color:#555">\u2591\u2591</span> free: ${fmtMem(freeMib)} (${freePct}%)</div>`;
-    }
-    html += `</div>`;
-
-    md.value = html;
-    this.tooltip = md;
+    const usedBlocks = Math.round((usedPct / 100) * barW);
+    const bar = "\u2588".repeat(usedBlocks) + "\u2591".repeat(barW - usedBlocks);
+    const legend = segments.map((s) => `${s.username}:${fmtMem(s.vram)}`).join(" ");
+    super(`${bar}`, vscode.TreeItemCollapsibleState.None);
+    this.description = `${usedPct}% ${legend}`;
+    this.iconPath = new vscode.ThemeIcon("graph", new vscode.ThemeColor(vramColor(usedPct)));
+    this.tooltip = buildVramTooltip(segments, totalVram, freeMib);
   }
 }
 
@@ -286,47 +278,3 @@ export class ErrorItem extends vscode.TreeItem {
   }
 }
 
-// ── Services Tree Items ───────────────────────────────────────────
-
-export class CategoryItem extends vscode.TreeItem {
-  constructor(
-    public readonly categoryId: string,
-    label: string,
-  ) {
-    super(label, vscode.TreeItemCollapsibleState.Expanded);
-    this.contextValue = "category";
-  }
-}
-
-export class ServiceItem extends vscode.TreeItem {
-  constructor(
-    public readonly service: ServiceDefinition,
-    status: ServiceStatus | undefined,
-  ) {
-    super(service.label, vscode.TreeItemCollapsibleState.None);
-    this.description = service.description;
-    this.tooltip = `${service.label} — ${service.description || ""}\n${service.script ? `Script: ${service.script}` : ""}`;
-
-    if (service.category === "action") {
-      this.iconPath = new vscode.ThemeIcon("stop-circle", new vscode.ThemeColor("errorForeground"));
-    } else if (service.category === "popular") {
-      this.iconPath = new vscode.ThemeIcon(
-        "star-full",
-        status === "running"
-          ? new vscode.ThemeColor("testing.iconPassed")
-          : new vscode.ThemeColor("editorWarning.foreground"),
-      );
-    } else if (status === "running") {
-      this.iconPath = new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor("testing.iconPassed"));
-    } else {
-      this.iconPath = new vscode.ThemeIcon("circle-outline");
-    }
-
-    this.command = {
-      command: "dockerServices.runService",
-      title: "Run Service",
-      arguments: [service],
-    };
-    this.contextValue = "service";
-  }
-}

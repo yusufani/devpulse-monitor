@@ -9,12 +9,10 @@ import {
   GpuDetailItem,
   VramMapItem,
   VramSegment,
-  SectionItem,
   ContainerItem,
   ContainerInfoItem,
   ProcessItem,
   ProcessDetailItem,
-  UserItem,
   GpuUserItem,
   OpenMonitorItem,
   tempColor,
@@ -52,13 +50,8 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
   getChildren(element?: SidebarItem): SidebarItem[] {
     if (!element) return this.getRootItems();
     if (element instanceof GpuItem) return this.getGpuChildren(element.gpu);
-    if (element instanceof SectionItem) {
-      if (element.sectionType === "containers") return this.getContainerItems();
-      if (element.sectionType === "hostProcs") return this.getHostProcsItems();
-    }
     if (element instanceof GpuUserItem) return this.getGpuUserChildren(element);
     if (element instanceof ContainerItem) return this.getContainerChildren(element);
-    if (element instanceof UserItem) return this.getUserChildren(element);
     if (element instanceof ProcessItem) return this.getProcessChildren(element);
     return [];
   }
@@ -66,20 +59,23 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
   private getRootItems(): SidebarItem[] {
     const items: SidebarItem[] = [];
     items.push(new SystemItem(this.system));
+    // Multi-GPU summary line
+    if (this.gpus.length > 1) {
+      const totalUsed = this.gpus.reduce((s, g) => s + g.memUsed, 0);
+      const totalMem = this.gpus.reduce((s, g) => s + g.memTotal, 0);
+      const totalPct = totalMem > 0 ? Math.round((totalUsed / totalMem) * 100) : 0;
+      items.push(new GpuDetailItem(
+        `Total VRAM: ${fmtMem(totalUsed)}/${fmtMem(totalMem)} (${totalPct}%) · ${this.gpus.length} GPUs`,
+        "server",
+        vramColor(totalPct),
+      ));
+    }
     for (const gpu of this.gpus) items.push(new GpuItem(gpu));
-    if (this.containers.length > 0) {
-      items.push(new SectionItem(`Containers (${this.containers.length})`, "containers"));
-    }
-    const hostProcs = this.gpuProcesses.filter((p) => !p.containerId);
-    if (hostProcs.length > 0) {
-      items.push(new SectionItem(`Host GPU Processes (${hostProcs.length})`, "hostProcs"));
-    }
     if (this.hasGpu) items.push(new OpenMonitorItem());
     return items;
   }
 
   private getGpuChildren(g: GpuInfo): SidebarItem[] {
-    const pct = g.memTotal > 0 ? Math.round((g.memUsed / g.memTotal) * 100) : 0;
     const items: SidebarItem[] = [];
 
     // Group processes on this GPU by user, sorted by total VRAM descending
@@ -98,22 +94,16 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
     }
     const sortedUsers = [...byUser.entries()].sort((a, b) => b[1].vram - a[1].vram);
 
-    // VRAM map: single bar with colored segments per user
-    if (sortedUsers.length > 0 || g.memTotal > 0) {
-      const segments: VramSegment[] = sortedUsers.map(([user, info]) => ({ username: user, vram: info.vram }));
-      items.push(new VramMapItem(segments, g.memTotal, g.memFree));
-    }
+    // VRAM map bar (compact, hover for colored rectangle)
+    const segments: VramSegment[] = sortedUsers.map(([user, info]) => ({ username: user, vram: info.vram }));
+    items.push(new VramMapItem(segments, g.memTotal, g.memFree));
 
-    // GPU details with colored icons
-    items.push(
-      new GpuDetailItem(
-        `VRAM: ${fmtMem(g.memUsed)} / ${fmtMem(g.memTotal)} (${pct}%)`,
-        "database",
-        vramColor(pct),
-      ),
-    );
-    items.push(new GpuDetailItem(`Temp: ${g.temp}\u00B0C`, "flame", tempColor(g.temp)));
-    items.push(new GpuDetailItem(`Power: ${g.power.toFixed(0)}W`, "zap", "terminal.ansiYellow"));
+    // Compact info line: temp + power + util
+    items.push(new GpuDetailItem(
+      `${g.temp}\u00B0C · ${g.power.toFixed(0)}W · ${g.util}% util`,
+      "flame",
+      tempColor(g.temp),
+    ));
 
     // User items (expandable with their containers/processes)
     for (const [user, info] of sortedUsers) {
@@ -162,37 +152,6 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
     return items;
   }
 
-  private getContainerItems(): SidebarItem[] {
-    const gpuByContainer = new Map<string, { vram: number; gpus: Set<number>; procs: GpuProcess[] }>();
-    for (const p of this.gpuProcesses) {
-      if (!p.containerId) continue;
-      if (!gpuByContainer.has(p.containerId))
-        gpuByContainer.set(p.containerId, { vram: 0, gpus: new Set(), procs: [] });
-      const entry = gpuByContainer.get(p.containerId)!;
-      entry.vram += p.memMib;
-      entry.gpus.add(p.gpuIndex);
-      entry.procs.push(p);
-    }
-
-    const sorted = [...this.containers].sort((a, b) => {
-      const aGpu = gpuByContainer.get(a.id)?.vram || 0;
-      const bGpu = gpuByContainer.get(b.id)?.vram || 0;
-      if (aGpu !== bGpu) return bGpu - aGpu;
-      const aRam = this.containerStats.get(a.id)?.memUsedMib || 0;
-      const bRam = this.containerStats.get(b.id)?.memUsedMib || 0;
-      return bRam - aRam;
-    });
-
-    return sorted.map((c) => {
-      const gpuInfo = gpuByContainer.get(c.id);
-      const vram = gpuInfo?.vram || 0;
-      const indices = gpuInfo ? [...gpuInfo.gpus].sort() : [];
-      const procCount = gpuInfo?.procs.length || 0;
-      const stats = this.containerStats.get(c.id);
-      return new ContainerItem(c, vram, indices, procCount, stats);
-    });
-  }
-
   private getContainerChildren(el: ContainerItem): SidebarItem[] {
     const items: SidebarItem[] = [];
     items.push(new ContainerInfoItem(`Owner: ${el.container.ownerName}`, "person"));
@@ -216,37 +175,6 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
       items.push(new ProcessItem(p));
     }
     return items;
-  }
-
-  private getHostProcsItems(): SidebarItem[] {
-    const hostProcs = this.gpuProcesses.filter((p) => !p.containerId);
-    const byUser = new Map<string, GpuProcess[]>();
-    for (const p of hostProcs) {
-      const user = p.username || "unknown";
-      if (!byUser.has(user)) byUser.set(user, []);
-      byUser.get(user)!.push(p);
-    }
-    const sorted = [...byUser.entries()].sort(
-      (a, b) => b[1].reduce((s, p) => s + p.memMib, 0) - a[1].reduce((s, p) => s + p.memMib, 0),
-    );
-    return sorted.map(([user, procs]) => {
-      const totalVram = procs.reduce((s, p) => s + p.memMib, 0);
-      return new UserItem(user, procs.length, totalVram);
-    });
-  }
-
-  private getUserChildren(el: UserItem): SidebarItem[] {
-    const hostProcs = this.gpuProcesses.filter(
-      (p) => !p.containerId && (p.username || "unknown") === el.username,
-    );
-    const seen = new Set<number>();
-    return hostProcs
-      .filter((p) => {
-        if (seen.has(p.pid)) return false;
-        seen.add(p.pid);
-        return true;
-      })
-      .map((p) => new ProcessItem(p));
   }
 
   private getProcessChildren(el: ProcessItem): SidebarItem[] {

@@ -33,6 +33,62 @@ function renderGpuCards(gpus: GpuInfo[]): string {
   return html;
 }
 
+function renderGpuHistoryCharts(history: Array<{ timestamp: number; gpus: Array<{ index: number; memUsed: number; memTotal: number; util: number; temp: number }> }>): string {
+  if (history.length < 2) return "";
+
+  const gpuIndices = new Set<number>();
+  for (const h of history) for (const g of h.gpus) gpuIndices.add(g.index);
+
+  let html = `<div class="section-title">GPU History (last ${history.length} samples)</div>`;
+
+  for (const idx of [...gpuIndices].sort()) {
+    const points = history.map((h) => {
+      const g = h.gpus.find((g) => g.index === idx);
+      return g ? { vramPct: g.memTotal > 0 ? (g.memUsed / g.memTotal) * 100 : 0, util: g.util, temp: g.temp } : null;
+    }).filter(Boolean) as Array<{ vramPct: number; util: number; temp: number }>;
+
+    if (points.length < 2) continue;
+
+    const w = 300, h2 = 60;
+    const stepX = w / (points.length - 1);
+
+    const vramPath = points.map((p, i) => `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(1)},${(h2 - (p.vramPct / 100) * h2).toFixed(1)}`).join(" ");
+    const utilPath = points.map((p, i) => `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(1)},${(h2 - (p.util / 100) * h2).toFixed(1)}`).join(" ");
+    const tempPath = points.map((p, i) => `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(1)},${(h2 - Math.min(p.temp, 100) / 100 * h2).toFixed(1)}`).join(" ");
+
+    html += `<div class="chart-card">
+      <div class="chart-label">GPU ${idx}</div>
+      <svg width="${w}" height="${h2}" class="chart-svg">
+        <line x1="0" y1="${h2 * 0.1}" x2="${w}" y2="${h2 * 0.1}" stroke="#333" stroke-dasharray="2"/>
+        <line x1="0" y1="${h2 * 0.5}" x2="${w}" y2="${h2 * 0.5}" stroke="#333" stroke-dasharray="2"/>
+        <line x1="0" y1="${h2 * 0.9}" x2="${w}" y2="${h2 * 0.9}" stroke="#333" stroke-dasharray="2"/>
+        <path d="${vramPath}" fill="none" stroke="#4ec9b0" stroke-width="2"/>
+        <path d="${utilPath}" fill="none" stroke="#dcdcaa" stroke-width="1.5" stroke-dasharray="4"/>
+        <path d="${tempPath}" fill="none" stroke="#f44747" stroke-width="1" stroke-dasharray="2"/>
+      </svg>
+      <div class="chart-legend"><span class="green">\u2500 VRAM%</span><span class="yellow">--- Util%</span><span class="red">\u00B7\u00B7 Temp</span></div>
+    </div>`;
+  }
+
+  return html;
+}
+
+function renderMultiGpuSummary(gpus: GpuInfo[]): string {
+  if (gpus.length <= 1) return "";
+  const totalUsed = gpus.reduce((s, g) => s + g.memUsed, 0);
+  const totalMem = gpus.reduce((s, g) => s + g.memTotal, 0);
+  const totalPct = totalMem > 0 ? Math.round((totalUsed / totalMem) * 100) : 0;
+  const avgUtil = Math.round(gpus.reduce((s, g) => s + g.util, 0) / gpus.length);
+  const maxTemp = Math.max(...gpus.map((g) => g.temp));
+
+  return `<div class="summary-bar">
+    <span>Total VRAM: <b class="${totalPct > 90 ? "red" : totalPct > 70 ? "yellow" : "green"}">${fmtMem(totalUsed)}/${fmtMem(totalMem)} (${totalPct}%)</b></span>
+    <span>Avg Util: <b>${avgUtil}%</b></span>
+    <span>Max Temp: <b class="${maxTemp > 80 ? "red" : maxTemp > 65 ? "yellow" : ""}">${maxTemp}\u00B0C</b></span>
+    <span>${gpus.length} GPUs</span>
+  </div>`;
+}
+
 function renderContainerSummary(data: GpuData): string {
   const { processes, containerStats, gpus } = data;
   const containerGpu: Record<string, Record<number, number>> = {};
@@ -52,17 +108,26 @@ function renderContainerSummary(data: GpuData): string {
 
   let headers = `<th>Container</th>`;
   for (const gi of gpuIndices) headers += `<th>G${gi}</th>`;
-  headers += `<th>VRAM</th><th>CPU</th><th>RAM</th>`;
+  headers += `<th>VRAM</th><th>CPU</th><th>RAM</th><th></th>`;
 
   let rows = "";
   for (const [cn, gm] of sc) {
     const tv = Object.values(gm).reduce((s, v) => s + v, 0);
     const cs = cnameToId[cn] ? containerStats.get(cnameToId[cn]) : undefined;
+    const cid = cnameToId[cn] || "";
     let cols = `<td class="name">${esc(cn)}</td>`;
     for (const gi of gpuIndices) cols += `<td class="${memClass(gm[gi] || 0)}">${gm[gi] ? fmtMem(gm[gi]) : "\u2014"}</td>`;
     cols += `<td class="${memClass(tv)}"><b>${fmtMem(tv)}</b></td>`;
     cols += `<td>${cs ? cs.cpuPercent.toFixed(1) + "%" : "\u2014"}</td>`;
     cols += `<td>${cs ? fmtMem(cs.memUsedMib) : "\u2014"}</td>`;
+    // Action buttons
+    let actions = "";
+    if (cn !== "(host)" && cid) {
+      actions = `<button class="btn btn-sm" onclick="restartContainer('${cid}','${esc(cn)}')" title="Restart">\u21BB</button>`;
+      actions += `<button class="btn btn-sm btn-warn" onclick="stopContainer('${cid}','${esc(cn)}')" title="Stop">\u25A0</button>`;
+      actions += `<button class="btn btn-sm btn-danger" onclick="killContainerAction('${cid}','${esc(cn)}')" title="Kill">\u00D7</button>`;
+    }
+    cols += `<td class="actions">${actions}</td>`;
     rows += `<tr>${cols}</tr>`;
   }
 
@@ -92,7 +157,8 @@ function renderProcessGroups(data: GpuData): string {
     const cid = cnameToId[cn] || "";
     let act = "";
     if (cn !== "(host)" && cid) {
-      act = `<button class="btn btn-warn" onclick="stopContainer('${cid}','${esc(cn)}')">Stop</button>`;
+      act = `<button class="btn btn-warn" onclick="restartContainer('${cid}','${esc(cn)}')">Restart</button>`;
+      act += `<button class="btn btn-warn" onclick="stopContainer('${cid}','${esc(cn)}')">Stop</button>`;
       act += `<button class="btn btn-danger" onclick="killContainerAction('${cid}','${esc(cn)}')">Kill</button>`;
     }
     html += `<div class="group-header"><span class="group-name">${esc(cn)}</span><span class="group-meta">${procs.length} procs \u00B7 VRAM ${fmtMem(tv)} \u00B7 RAM ${fmtMem(tr)} \u00B7 GPU ${gu}</span>${act}</div>`;
@@ -103,21 +169,28 @@ function renderProcessGroups(data: GpuData): string {
       const co = last ? "  " : "\u2502 ";
       const cmd = p.cmdline.length > 80 ? p.cmdline.substring(0, 77) + "..." : p.cmdline;
       const cw = p.cwd.length > 40 ? "..." + p.cwd.substring(p.cwd.length - 37) : p.cwd;
-      html += `<div class="proc-row"><span class="tree">${br}</span><span class="pid">${p.pid}</span><span class="mem ${memClass(p.memMib)}">${fmtMem(p.memMib)}</span><span class="ram">${fmtMem(p.ramMib)}</span><span class="gpu-idx">G${p.gpuIndex}</span><span class="pname">${esc(p.processName)}</span><button class="btn-kill" onclick="killProc(${p.pid},'${esc(p.processName)}',${p.memMib})">\u00D7</button></div>`;
-      html += `<div class="proc-detail"><span class="tree dim">${co}</span><span class="dim">\u2514 ${esc(cw)}$ ${esc(cmd)}</span></div>`;
+      html += `<div class="proc-row" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree">${br}</span><span class="pid">${p.pid}</span><span class="mem ${memClass(p.memMib)}">${fmtMem(p.memMib)}</span><span class="ram">${fmtMem(p.ramMib)}</span><span class="gpu-idx">G${p.gpuIndex}</span><span class="pname">${esc(p.processName)}</span><span class="user-tag">${esc(p.username)}</span><button class="btn-kill" onclick="killProc(${p.pid},'${esc(p.processName)}',${p.memMib})">\u00D7</button></div>`;
+      html += `<div class="proc-detail" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree dim">${co}</span><span class="dim">\u2514 ${esc(cw)}$ ${esc(cmd)}</span></div>`;
     }
   }
   return html;
 }
 
-export function getGpuMonitorHtml(data: GpuData): string {
+export interface GpuHistoryPoint {
+  timestamp: number;
+  gpus: Array<{ index: number; memUsed: number; memTotal: number; util: number; temp: number }>;
+}
+
+export function getGpuMonitorHtml(data: GpuData, refreshIntervalSec = 5, history: GpuHistoryPoint[] = []): string {
   const { gpus, processes, error } = data;
   const gpuRows = renderGpuCards(gpus);
+  const multiGpuSummary = renderMultiGpuSummary(gpus);
+  const historyCharts = renderGpuHistoryCharts(history);
   const hasProcesses = processes.length > 0;
 
   let processHtml = "";
   if (hasProcesses) {
-    processHtml = `<div class="section-title">Container Summary</div>${renderContainerSummary(data)}<div class="section-title">GPU Processes</div>${renderProcessGroups(data)}`;
+    processHtml = `<div class="section-title">Container Summary</div>${renderContainerSummary(data)}<div class="section-title">GPU Processes <input type="text" id="procFilter" class="filter-input" placeholder="Filter by name, user, container..." oninput="filterProcs()"></div>${renderProcessGroups(data)}`;
   } else if (!error) {
     processHtml = `<div class="no-data">No GPU processes.</div>`;
   }
@@ -131,7 +204,10 @@ body{font-family:var(--vscode-editor-font-family,monospace);font-size:13px;color
 .refresh-btn{background:none;border:1px solid var(--border);color:var(--fg);padding:4px 12px;cursor:pointer;border-radius:3px;font-size:12px}
 .refresh-btn:hover{background:var(--border)}
 .error{color:var(--red);padding:8px;border:1px solid var(--red);border-radius:4px;margin-bottom:12px}
-.section-title{color:var(--cyan);font-weight:bold;margin:16px 0 6px 0;font-size:13px;border-bottom:1px solid var(--border);padding-bottom:4px}
+.section-title{color:var(--cyan);font-weight:bold;margin:16px 0 6px 0;font-size:13px;border-bottom:1px solid var(--border);padding-bottom:4px;display:flex;align-items:center;gap:12px}
+.summary-bar{background:var(--card-bg);border:1px solid var(--border);border-radius:6px;padding:8px 14px;margin-bottom:10px;display:flex;gap:24px;flex-wrap:wrap;font-size:13px}
+.summary-bar span{color:var(--dim)}
+.summary-bar b{color:var(--fg)}
 .gpu-card{background:var(--card-bg);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:10px}
 .gpu-header{font-weight:bold;margin-bottom:8px}
 .gpu-stats{display:flex;flex-direction:column;gap:4px}
@@ -143,10 +219,17 @@ body{font-family:var(--vscode-editor-font-family,monospace);font-size:13px;color
 .bar{width:160px;height:14px;background:#333;border-radius:3px;overflow:hidden;flex-shrink:0}
 .bar-fill{height:100%;border-radius:3px;transition:width .3s}
 .bar-fill.green{background:var(--green)}.bar-fill.yellow{background:var(--yellow)}.bar-fill.red{background:var(--red)}
+.chart-card{background:var(--card-bg);border:1px solid var(--border);border-radius:6px;padding:8px 14px;margin-bottom:8px;display:inline-block;margin-right:8px}
+.chart-label{font-weight:bold;margin-bottom:4px;font-size:12px}
+.chart-svg{display:block}
+.chart-legend{display:flex;gap:12px;margin-top:4px;font-size:11px}
+.filter-input{background:var(--card-bg);border:1px solid var(--border);color:var(--fg);padding:3px 8px;border-radius:3px;font-size:12px;font-family:inherit;width:200px}
+.filter-input:focus{outline:1px solid var(--cyan);border-color:var(--cyan)}
 table{border-collapse:collapse;width:100%;margin-bottom:8px}
 th,td{text-align:right;padding:3px 10px;border-bottom:1px solid var(--border);font-size:12px}
 th{color:var(--dim);font-weight:normal;text-transform:uppercase;font-size:11px}
 td.name{text-align:left;font-weight:bold;color:var(--cyan)}
+td.actions{text-align:right;white-space:nowrap}
 .group-header{background:var(--card-bg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;margin:8px 0 2px 0;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .group-name{color:var(--cyan);font-weight:bold}
 .group-meta{color:var(--dim);font-size:12px}
@@ -158,30 +241,48 @@ td.name{text-align:left;font-weight:bold;color:var(--cyan)}
 .ram{width:60px;text-align:right;color:var(--dim)}
 .gpu-idx{width:24px;color:var(--dim)}
 .pname{color:var(--fg);flex:1}
+.user-tag{color:var(--dim);font-size:11px;background:var(--card-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--border)}
 .dim{color:var(--dim)}
 .green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}
 .no-data{color:var(--dim);padding:12px}
 .btn{border:1px solid var(--border);background:none;color:var(--fg);padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px}
+.btn-sm{padding:1px 5px;font-size:12px}
 .btn-warn{border-color:var(--yellow);color:var(--yellow)}.btn-warn:hover{background:var(--yellow);color:#000}
 .btn-danger{border-color:var(--red);color:var(--red)}.btn-danger:hover{background:var(--red);color:#fff}
 .btn-kill{background:none;border:none;color:var(--red);cursor:pointer;font-size:16px;padding:0 4px;opacity:.5}.btn-kill:hover{opacity:1}
+.hidden{display:none!important}
 </style></head><body>
 <div class="header">
   <h2>GPU / Docker VRAM Monitor</h2>
   <div>
-    <span class="meta">${new Date().toLocaleTimeString()} \u00B7 ${processes.length} procs \u00B7 auto-refresh 5s</span>
+    <span class="meta">${new Date().toLocaleTimeString()} \u00B7 ${processes.length} procs \u00B7 auto-refresh ${refreshIntervalSec}s</span>
     <button class="refresh-btn" onclick="vscode.postMessage({command:'refresh'})">\u21BB Refresh</button>
   </div>
 </div>
 ${error ? `<div class="error">${esc(error)}</div>` : ""}
+${multiGpuSummary}
 <div class="section-title">GPU Overview</div>
 ${gpuRows}
+${historyCharts}
 ${processHtml}
 <script>
 const vscode=acquireVsCodeApi();
 function killProc(p,n,m){vscode.postMessage({command:'killProcess',pid:p,name:n,mem:m})}
 function stopContainer(c,n){vscode.postMessage({command:'stopContainer',containerId:c,name:n})}
 function killContainerAction(c,n){vscode.postMessage({command:'killContainer',containerId:c,name:n})}
+function restartContainer(c,n){vscode.postMessage({command:'restartContainer',containerId:c,name:n})}
+function filterProcs(){
+  const q=(document.getElementById('procFilter')||{}).value||'';
+  const ql=q.toLowerCase();
+  document.querySelectorAll('.proc-row,.proc-detail').forEach(function(el){
+    if(!ql){el.classList.remove('hidden');return}
+    var n=el.getAttribute('data-name')||'';
+    var u=el.getAttribute('data-user')||'';
+    var c=el.getAttribute('data-container')||'';
+    var match=(n+' '+u+' '+c).toLowerCase().indexOf(ql)>=0;
+    el.classList.toggle('hidden',!match);
+  });
+}
 </script>
 </body></html>`;
 }

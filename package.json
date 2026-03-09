@@ -2,9 +2,9 @@
   "name": "docker-monitor",
   "displayName": "Docker Monitor",
   "description": "Real-time GPU, CPU, RAM monitoring with Docker container management for VS Code",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "ANISOFT",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "https://github.com/yusuf-ani/vscode-docker-monitor"
@@ -32,16 +32,6 @@
           "minimum": 2,
           "description": "Refresh interval in seconds for webview panel"
         },
-        "dockerMonitor.servicesConfigPath": {
-          "type": "string",
-          "default": ".vscode/docker-services.json",
-          "description": "Path to services configuration file (relative to workspace)"
-        },
-        "dockerMonitor.autoDiscoverServices": {
-          "type": "boolean",
-          "default": true,
-          "description": "Auto-discover docker-compose files in workspace"
-        },
         "dockerMonitor.gpuMonitoring": {
           "type": "boolean",
           "default": true,
@@ -66,8 +56,9 @@
     "views": {
       "dockerMonitor": [
         {
+          "type": "webview",
           "id": "dockerServices",
-          "name": "Services"
+          "name": "Container Resources"
         },
         {
           "id": "gpuMonitor",
@@ -78,17 +69,8 @@
     "commands": [
       {
         "command": "dockerServices.refresh",
-        "title": "Refresh Service Status",
+        "title": "Refresh Container Resources",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "dockerServices.runService",
-        "title": "Run Service"
-      },
-      {
-        "command": "dockerServices.stopAll",
-        "title": "Stop All Services",
-        "icon": "$(stop-circle)"
       },
       {
         "command": "gpuMonitor.refresh",
@@ -114,17 +96,22 @@
         "command": "gpuMonitor.killContainer",
         "title": "Force Kill Container",
         "icon": "$(trash)"
+      },
+      {
+        "command": "gpuMonitor.restartContainer",
+        "title": "Restart Container",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "gpuMonitor.showContainerLogs",
+        "title": "Show Container Logs",
+        "icon": "$(output)"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "dockerServices.refresh",
-          "when": "view == dockerServices",
-          "group": "navigation"
-        },
-        {
-          "command": "dockerServices.stopAll",
           "when": "view == dockerServices",
           "group": "navigation"
         },
@@ -151,17 +138,20 @@
           "group": "inline"
         },
         {
+          "command": "gpuMonitor.restartContainer",
+          "when": "view == gpuMonitor && viewItem == gpuContainer",
+          "group": "inline"
+        },
+        {
           "command": "gpuMonitor.killContainer",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.showContainerLogs",
           "when": "view == gpuMonitor && viewItem == gpuContainer"
         }
       ]
-    },
-    "jsonValidation": [
-      {
-        "fileMatch": "docker-services.json",
-        "url": "./schemas/docker-services.schema.json"
-      }
-    ]
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",
@@ -171,7 +161,7 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "package": "npx @vscode/vsce package --no-dependencies -o dist/",
+    "package": "mkdir -p dist && npx @vscode/vsce package --no-dependencies -o dist/",
     "publish": "npx @vscode/vsce publish --no-dependencies",
     "publish:ovsx": "npx ovsx publish *.vsix",
     "precommit": "npm run lint && npm run typecheck"

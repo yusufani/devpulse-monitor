@@ -1,16 +1,12 @@
 import * as vscode from "vscode";
 import { createCollectors } from "./collectors/factory";
 import { MonitorService } from "./services/monitorService";
-import { ServiceRegistry } from "./services/serviceRegistry";
 import { StatusBarController } from "./views/statusBar";
 import { GpuSidebarProvider } from "./views/gpuSidebar";
-import { ServicesTreeProvider } from "./views/servicesSidebar";
+import { ContainerTableViewProvider } from "./views/containerTableView";
 import { GpuMonitorPanel } from "./views/webview/gpuMonitorPanel";
 import { ProcessItem, ContainerItem } from "./views/treeItems";
-import { ServiceDefinition } from "./types";
 import { getOutputChannel, log } from "./utils/logger";
-
-let servicesInterval: ReturnType<typeof setInterval> | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = getOutputChannel();
@@ -25,52 +21,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const monitor = new MonitorService(collectors.system, collectors.gpu, collectors.docker);
   context.subscriptions.push(monitor);
 
-  // ── ServiceRegistry ───────────────────────────────────────────
-  const registry = new ServiceRegistry();
-  await registry.load();
-
-  // ── Services panel ────────────────────────────────────────────
-  const servicesProvider = new ServicesTreeProvider(registry);
-  const servicesView = vscode.window.createTreeView("dockerServices", {
-    treeDataProvider: servicesProvider,
-    showCollapseAll: true,
-  });
-  context.subscriptions.push(servicesView);
-
+  // ── Container Resources table (webview sidebar) ───────────────
+  const containerTable = new ContainerTableViewProvider(monitor);
   context.subscriptions.push(
-    vscode.commands.registerCommand("dockerServices.runService", (service: ServiceDefinition) => {
-      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (!root) {
-        vscode.window.showErrorMessage("No workspace folder open.");
-        return;
-      }
-      if (service.script) {
-        const terminal = vscode.window.createTerminal({ name: service.label, cwd: root });
-        terminal.show();
-        terminal.sendText(`bash "${root}/${service.script}"`);
-      } else if (service.composeName) {
-        const terminal = vscode.window.createTerminal({ name: service.label, cwd: root });
-        terminal.show();
-        terminal.sendText(`docker compose up -d ${service.composeName}`);
-      }
-    }),
+    vscode.window.registerWebviewViewProvider(ContainerTableViewProvider.viewType, containerTable),
+    containerTable,
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("dockerServices.refresh", () => servicesProvider.refresh()),
+    vscode.commands.registerCommand("dockerServices.refresh", () => monitor.refresh()),
   );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("dockerServices.stopAll", () => {
-      const stopEntry = registry.getServices().find((s) => s.category === "action");
-      if (stopEntry) {
-        vscode.commands.executeCommand("dockerServices.runService", stopEntry);
-      }
-    }),
-  );
-
-  servicesProvider.refresh();
-  servicesInterval = setInterval(() => servicesProvider.refresh(), 30_000);
 
   // ── GPU / System Monitor sidebar ──────────────────────────────
   const gpuSidebar = new GpuSidebarProvider(monitor);
@@ -160,19 +120,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // ── Cleanup ───────────────────────────────────────────────────
-  context.subscriptions.push({
-    dispose: () => {
-      if (servicesInterval) clearInterval(servicesInterval);
-    },
-  });
+  // ── Restart container ────────────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.restartContainer", async (item: ContainerItem) => {
+      if (!(item instanceof ContainerItem)) return;
+      if (
+        (await vscode.window.showWarningMessage(
+          `Restart container ${item.container.name}?`,
+          { modal: true },
+          "Restart",
+        )) === "Restart"
+      ) {
+        try {
+          await monitor.restartContainer(item.container.id);
+          vscode.window.showInformationMessage(`Restarted ${item.container.name}`);
+          monitor.refresh();
+        } catch (e) {
+          vscode.window.showErrorMessage(`${e}`);
+        }
+      }
+    }),
+  );
+
+  // ── Container logs ──────────────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.showContainerLogs", async (item: ContainerItem) => {
+      if (!(item instanceof ContainerItem)) return;
+      const terminal = vscode.window.createTerminal(`Logs: ${item.container.name}`);
+      terminal.sendText(`docker logs -f --tail 100 ${item.container.id}`);
+      terminal.show();
+    }),
+  );
 
   log("Extension activated.");
 }
 
 export function deactivate(): void {
-  if (servicesInterval) {
-    clearInterval(servicesInterval);
-    servicesInterval = undefined;
-  }
+  // All subscriptions are disposed by VS Code
 }

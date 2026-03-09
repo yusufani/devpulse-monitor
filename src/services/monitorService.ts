@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { SystemInfo, GpuData, ContainerFullInfo, MonitorData } from "../types";
 import { ISystemCollector, IGpuCollector, IDockerCollector } from "../collectors/interfaces";
+import { fmtMem } from "../utils/format";
 import { log } from "../utils/logger";
 
 export class MonitorService implements vscode.Disposable {
@@ -12,6 +13,8 @@ export class MonitorService implements vscode.Disposable {
   private containers: ContainerFullInfo[] = [];
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
   private gpuEnabled: boolean;
+  private alertFired = new Set<number>(); // GPU indices that already fired alert
+  private gpuHistory: Array<{ timestamp: number; gpus: Array<{ index: number; memUsed: number; memTotal: number; util: number; temp: number }> }> = [];
 
   constructor(
     private systemCollector: ISystemCollector,
@@ -98,6 +101,18 @@ export class MonitorService implements vscode.Disposable {
       log(`Monitor refresh error: ${e}`);
     }
 
+    // Record GPU history for charts (keep last 60 data points)
+    if (this.gpuData.gpus.length > 0) {
+      this.gpuHistory.push({
+        timestamp: Date.now(),
+        gpus: this.gpuData.gpus.map((g) => ({ index: g.index, memUsed: g.memUsed, memTotal: g.memTotal, util: g.util, temp: g.temp })),
+      });
+      if (this.gpuHistory.length > 60) this.gpuHistory.shift();
+    }
+
+    // VRAM alerts
+    this.checkVramAlerts();
+
     this._onDataUpdated.fire(this.getLatestData());
   }
 
@@ -124,9 +139,37 @@ export class MonitorService implements vscode.Disposable {
     await this.dockerCollector.killContainer(containerId);
   }
 
+  async restartContainer(containerId: string): Promise<void> {
+    await this.dockerCollector.restartContainer(containerId);
+  }
+
   async killProcess(pid: number): Promise<void> {
     const { execCommand } = await import("../utils/exec");
     await execCommand(`kill -9 ${pid}`, { timeout: 5000 });
+  }
+
+  getGpuHistory(): typeof this.gpuHistory {
+    return this.gpuHistory;
+  }
+
+  private checkVramAlerts(): void {
+    for (const gpu of this.gpuData.gpus) {
+      const pct = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * 100) : 0;
+      if (pct > 90 && !this.alertFired.has(gpu.index)) {
+        this.alertFired.add(gpu.index);
+        vscode.window.showWarningMessage(
+          `GPU ${gpu.index} VRAM ${pct}% (${fmtMem(gpu.memUsed)}/${fmtMem(gpu.memTotal)})`,
+          "Open Monitor",
+        ).then((action) => {
+          if (action === "Open Monitor") {
+            vscode.commands.executeCommand("gpuMonitor.show");
+          }
+        });
+      } else if (pct <= 85) {
+        // Reset alert when usage drops back
+        this.alertFired.delete(gpu.index);
+      }
+    }
   }
 
   dispose(): void {

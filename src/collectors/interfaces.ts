@@ -17,4 +17,5 @@ export interface IDockerCollector {
   getContainerStats(): Promise<Map<string, ContainerStats>>;
   stopContainer(containerId: string): Promise<void>;
   killContainer(containerId: string): Promise<void>;
+  restartContainer(containerId: string): Promise<void>;
 }

@@ -4,7 +4,6 @@ import { IDockerCollector } from "./interfaces";
 import { ContainerStats, ContainerFullInfo } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
 import { toMib } from "../utils/format";
-import { log } from "../utils/logger";
 import { detectPlatform } from "../utils/platform";
 
 async function readProcFile(path: string): Promise<string> {
@@ -120,7 +119,7 @@ export class DockerCollector implements IDockerCollector {
     try {
       const { stdout } = await execCommand(
         `${this.docker} stats --no-stream --no-trunc --format "{{.ID}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}"`,
-        { timeout: 15000 },
+        { timeout: 20000, retries: 1 },
       );
       const numCores = os.cpus().length || 1;
       for (const line of stdout.trim().split("\n")) {
@@ -152,5 +151,9 @@ export class DockerCollector implements IDockerCollector {
 
   async killContainer(containerId: string): Promise<void> {
     await execCommand(`${this.docker} kill ${containerId}`);
+  }
+
+  async restartContainer(containerId: string): Promise<void> {
+    await execCommand(`${this.docker} restart ${containerId}`, { timeout: 30000 });
   }
 }

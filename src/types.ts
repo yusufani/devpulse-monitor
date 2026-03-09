@@ -60,20 +60,3 @@ export interface MonitorData {
   containers: ContainerFullInfo[];
 }
 
-export interface ServiceDefinition {
-  id: string;
-  label: string;
-  category?: string;
-  dockerService?: string;
-  composeName?: string;
-  script?: string;
-  description?: string;
-}
-
-export interface ServiceCategory {
-  id: string;
-  label: string;
-  sortOrder: number;
-}
-
-export type ServiceStatus = "running" | "stopped";

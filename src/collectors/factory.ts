@@ -1,5 +1,4 @@
 import { detectPlatform } from "../utils/platform";
-import { findBinary } from "../utils/exec";
 import { log } from "../utils/logger";
 import { ISystemCollector, IGpuCollector, IDockerCollector } from "./interfaces";
 import { LinuxSystemCollector } from "./linuxSystem";

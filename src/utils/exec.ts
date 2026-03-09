@@ -30,12 +30,24 @@ export async function findBinary(name: string): Promise<string | null> {
 
 export async function execCommand(
   command: string,
-  options: { timeout?: number } = {},
+  options: { timeout?: number; retries?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  return execAsync(command, {
-    shell: getShell(),
-    timeout: options.timeout ?? 30000,
-  });
+  const maxRetries = options.retries ?? 0;
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await execAsync(command, {
+        shell: getShell(),
+        timeout: options.timeout ?? 30000,
+      });
+    } catch (e) {
+      lastError = e;
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError;
 }
 
 export function clearBinaryCache(): void {

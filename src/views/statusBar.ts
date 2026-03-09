@@ -25,13 +25,11 @@ function getGpuUserVram(gpu: GpuInfo, processes: GpuProcess[], containers: Conta
     .map(([username, vram]) => ({ username, vram }));
 }
 
-function buildVramBar(gpu: GpuInfo, processes: GpuProcess[], containers: ContainerFullInfo[], barWidth = 10): string {
+function buildGpuText(gpu: GpuInfo, processes: GpuProcess[], containers: ContainerFullInfo[]): string {
+  const pct = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * 100) : 0;
   const users = getGpuUserVram(gpu, processes, containers);
-  const usedBlocks = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * barWidth) : 0;
-  const freeBlocks = barWidth - usedBlocks;
-  const bar = "\u2588".repeat(usedBlocks) + "\u2591".repeat(freeBlocks);
   const legend = users.map((u) => `${u.username}:${fmtMem(u.vram)}`).join(" ");
-  return `G${gpu.index}[${bar}]${legend ? " " + legend : ""}`;
+  return `G${gpu.index}:${pct}% ${fmtMem(gpu.memUsed)}/${fmtMem(gpu.memTotal)}${legend ? " " + legend : ""}`;
 }
 
 function buildHtmlTooltip(
@@ -105,13 +103,26 @@ export class StatusBarController implements vscode.Disposable {
     this.subscription = monitor.onDataUpdated((data) => {
       const parts: string[] = [];
       for (const g of data.gpuData.gpus) {
-        parts.push(buildVramBar(g, data.gpuData.processes, data.containers));
+        parts.push(buildGpuText(g, data.gpuData.processes, data.containers));
       }
       const memPct =
         data.system.memTotalMib > 0 ? Math.round((data.system.memUsedMib / data.system.memTotalMib) * 100) : 0;
       parts.push(`CPU ${data.system.cpuPercent}%`);
       parts.push(`RAM ${memPct}%`);
       this.statusBarItem.text = `$(circuit-board) ${parts.join(" | ")}`;
+
+      // Color the status bar based on max GPU usage
+      const maxPct = data.gpuData.gpus.reduce((max, g) => {
+        const p = g.memTotal > 0 ? Math.round((g.memUsed / g.memTotal) * 100) : 0;
+        return Math.max(max, p);
+      }, 0);
+      if (maxPct > 90) {
+        this.statusBarItem.color = "#FF4444";
+      } else if (maxPct > 70) {
+        this.statusBarItem.color = "#CCCC00";
+      } else {
+        this.statusBarItem.color = undefined;
+      }
 
       // HTML tooltip with colored VRAM bars
       this.statusBarItem.tooltip = buildHtmlTooltip(

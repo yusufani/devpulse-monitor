@@ -5,6 +5,7 @@ import { getGpuMonitorHtml } from "./gpuMonitorHtml";
 export class GpuMonitorPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private interval: ReturnType<typeof setInterval> | undefined;
+  private refreshIntervalSec = 5;
 
   constructor(
     private monitor: MonitorService,
@@ -49,6 +50,14 @@ export class GpuMonitorPanel implements vscode.Disposable {
             await this.monitor.killContainer(msg.containerId);
             this.refresh();
           }
+        } else if (msg.command === "restartContainer") {
+          if (
+            (await vscode.window.showWarningMessage(`Restart ${msg.name}?`, { modal: true }, "Restart")) ===
+            "Restart"
+          ) {
+            await this.monitor.restartContainer(msg.containerId);
+            this.refresh();
+          }
         } else if (msg.command === "refresh") {
           this.refresh();
         }
@@ -58,16 +67,20 @@ export class GpuMonitorPanel implements vscode.Disposable {
     });
 
     this.refresh();
-    const intervalSec = vscode.workspace
+    this.refreshIntervalSec = vscode.workspace
       .getConfiguration("dockerMonitor")
       .get<number>("webviewRefreshInterval", 5);
-    this.interval = setInterval(() => this.refresh(), intervalSec * 1000);
+    this.interval = setInterval(() => this.refresh(), this.refreshIntervalSec * 1000);
   }
 
   async refresh(): Promise<void> {
     await this.monitor.refresh();
     if (this.panel) {
-      this.panel.webview.html = getGpuMonitorHtml(this.monitor.getGpuData());
+      this.panel.webview.html = getGpuMonitorHtml(
+        this.monitor.getGpuData(),
+        this.refreshIntervalSec,
+        this.monitor.getGpuHistory(),
+      );
     }
   }
 
