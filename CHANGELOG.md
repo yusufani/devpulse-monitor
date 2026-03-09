@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0 (2026-03-09)
+
+
+### Features
+
+* enhance GPU monitoring with user-specific VRAM tracking and visualization ([84c3a98](https://github.com/yusufani/vscode-docker-monitor/commit/84c3a9883bba150fbc0feb782c73053f670b01de))
+
+
+### Bug Fixes
+
+* add .vscode/ to .gitignore ([08b5103](https://github.com/yusufani/vscode-docker-monitor/commit/08b51031375e550faabadd8f670dc001d6078fad))
+* **ci:** remove npm cache and use npm install instead of npm ci ([5d75481](https://github.com/yusufani/vscode-docker-monitor/commit/5d75481384efcd098ac0a1eafea91b2d1688fadf))
+
 ## [1.0.0](https://github.com/yusuf-ani/vscode-docker-monitor/releases/tag/v1.0.0) (2025-03-09)
 
 ### Features
