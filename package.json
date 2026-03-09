@@ -171,7 +171,7 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "package": "npx @vscode/vsce package --no-dependencies",
+    "package": "npx @vscode/vsce package --no-dependencies -o dist/",
     "publish": "npx @vscode/vsce publish --no-dependencies",
     "publish:ovsx": "npx ovsx publish *.vsix",
     "precommit": "npm run lint && npm run typecheck"
