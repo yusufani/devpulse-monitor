@@ -8,7 +8,7 @@ Real-time GPU, CPU, and RAM monitoring with Docker container management — righ
 - **GPU Monitoring** — NVIDIA (nvidia-smi), AMD (rocm-smi), Apple Silicon (system_profiler)
 - **Docker Containers** — Live container list with CPU/RAM/VRAM stats, stop/kill actions
 - **GPU Processes** — Per-process VRAM usage, container mapping, kill from sidebar
-- **Services Panel** — Configurable service launcher with status indicators
+- **Container Resources Table** — Sortable table view of all containers with VRAM/CPU/RAM, group by owner
 - **WebView Dashboard** — Detailed GPU/process visualization (`Ctrl+Shift+P` → "Open GPU Monitor")
 
 ## Cross-Platform Support
@@ -46,43 +46,9 @@ code --install-extension docker-monitor-*.vsix
 |---------|---------|-------------|
 | `dockerMonitor.refreshInterval` | `10` | Sidebar refresh interval (seconds) |
 | `dockerMonitor.webviewRefreshInterval` | `5` | WebView refresh interval (seconds) |
-| `dockerMonitor.servicesConfigPath` | `.vscode/docker-services.json` | Path to services config |
-| `dockerMonitor.autoDiscoverServices` | `true` | Auto-discover docker-compose services |
 | `dockerMonitor.gpuMonitoring` | `true` | Enable GPU monitoring |
 | `dockerMonitor.dockerBinary` | `""` | Custom docker binary path (auto-detected if empty) |
 
-### Services Configuration
-
-Create `.vscode/docker-services.json` in your workspace:
-
-```json
-{
-  "categories": [
-    { "id": "db", "label": "DATABASES", "sortOrder": 0 },
-    { "id": "app", "label": "APPLICATIONS", "sortOrder": 1 }
-  ],
-  "services": [
-    {
-      "id": "postgres",
-      "label": "PostgreSQL",
-      "category": "db",
-      "dockerService": "postgres",
-      "script": "scripts/run-postgres.sh",
-      "description": "Database :5432"
-    },
-    {
-      "id": "api",
-      "label": "API Server",
-      "category": "app",
-      "composeName": "api",
-      "description": "Backend API :8080"
-    }
-  ]
-}
-```
-
-If no config file exists and `autoDiscoverServices` is enabled, the extension will find `docker-compose*.yml` files and list their services automatically.
-
 ## License
 
-MIT
+Source Available — free for personal and non-commercial use. Commercial use requires written permission. See [LICENSE](LICENSE) for details.
