@@ -43,7 +43,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   }
 
   private _updateView(): void {
-    if (!this._view || !this._view.visible) return;
+    if (!this._view) return;
     this._view.webview.html = this._buildHtml();
   }
 
