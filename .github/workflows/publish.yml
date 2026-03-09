@@ -58,22 +58,23 @@ jobs:
           gh release download ${{ steps.resolve.outputs.tag }} --pattern "*.vsix" || {
             echo "No VSIX found in release, building fresh..."
             npm run package
+            cp dist/*.vsix . 2>/dev/null || true
           }
 
       - name: List VSIX files
-        run: ls -la *.vsix
+        run: ls -la *.vsix dist/*.vsix 2>/dev/null || true
 
       # Publish to VS Code Marketplace
       - name: Publish to VS Code Marketplace
         if: ${{ inputs.marketplace }}
-        run: npx @vscode/vsce publish --packagePath *.vsix
+        run: npx @vscode/vsce publish --packagePath $(ls *.vsix dist/*.vsix 2>/dev/null | head -1)
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
       # Publish to Open VSX (optional, for VS Codium users)
       - name: Publish to Open VSX
         if: ${{ inputs.openvsx }}
-        run: npx ovsx publish *.vsix
+        run: npx ovsx publish $(ls *.vsix dist/*.vsix 2>/dev/null | head -1)
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        continue-on-error: true  # Open VSX is nice-to-have, don't fail the whole job
+        continue-on-error: true

@@ -37,11 +37,11 @@ jobs:
       - name: Upload VSIX to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ needs.release-please.outputs.tag_name }} *.vsix
+        run: gh release upload ${{ needs.release-please.outputs.tag_name }} dist/*.vsix
 
       - name: Upload VSIX as artifact (for publish workflow)
         uses: actions/upload-artifact@v4
         with:
           name: vsix
-          path: "*.vsix"
+          path: "dist/*.vsix"
           retention-days: 90
