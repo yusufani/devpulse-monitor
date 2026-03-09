@@ -9,12 +9,27 @@
     "type": "git",
     "url": "https://github.com/yusuf-ani/vscode-docker-monitor"
   },
-  "extensionKind": ["workspace"],
+  "extensionKind": [
+    "workspace"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other", "Visualization"],
-  "keywords": ["gpu", "docker", "monitor", "nvidia", "amd", "system", "vram", "cpu", "ram"],
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "gpu",
+    "docker",
+    "monitor",
+    "nvidia",
+    "amd",
+    "system",
+    "vram",
+    "cpu",
+    "ram"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
