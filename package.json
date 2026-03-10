@@ -1,5 +1,5 @@
 {
-  "name": "devpulse",
+  "name": "devpulse-monitor",
   "displayName": "DevPulse",
   "description": "Real-time GPU, CPU, RAM monitoring with container resource tracking for VS Code",
   "icon": "images/icon.png",
