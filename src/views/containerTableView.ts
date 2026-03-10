@@ -1,9 +1,6 @@
 import * as vscode from "vscode";
 import { MonitorService } from "../services/monitorService";
-import { ContainerFullInfo, ContainerStats, GpuProcess, MonitorData } from "../types";
-import { fmtMem } from "../utils/format";
-
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+import { MonitorData } from "../types";
 
 interface ContainerRow {
   name: string;

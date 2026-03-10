@@ -76,6 +76,7 @@ function getProcessDetailFromProc(
 
   try {
     // cwd via readlink is sync-safe but we need exec for symlink
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { readlinkSync } = require("fs");
     cwd = readlinkSync(`/proc/${pid}/cwd`);
   } catch {
