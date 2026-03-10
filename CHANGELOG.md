@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1](https://github.com/yusufani/vscode-docker-monitor/compare/v1.2.0...v1.2.1) (2026-03-10)
+
+
+### Bug Fixes
+
+* update display name to include full description in package.json ([100d812](https://github.com/yusufani/vscode-docker-monitor/commit/100d8124f24abbce4e7bdda864170586d41597cb))
+* update extension name to devpulse-monitor in package.json ([8a65bfa](https://github.com/yusufani/vscode-docker-monitor/commit/8a65bfab28d7f25ec5f06598d907745c72c0e725))
+
 ## [1.2.0](https://github.com/yusufani/vscode-docker-monitor/compare/v1.1.0...v1.2.0) (2026-03-10)
 
 
