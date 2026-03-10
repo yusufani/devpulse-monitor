@@ -4,7 +4,7 @@ let _channel: vscode.OutputChannel | undefined;
 
 export function getOutputChannel(): vscode.OutputChannel {
   if (!_channel) {
-    _channel = vscode.window.createOutputChannel("Docker Monitor");
+    _channel = vscode.window.createOutputChannel("DevPulse");
   }
   return _channel;
 }

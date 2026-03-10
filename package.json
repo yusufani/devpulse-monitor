@@ -1,7 +1,8 @@
 {
-  "name": "docker-monitor",
-  "displayName": "Docker Monitor",
-  "description": "Real-time GPU, CPU, RAM monitoring with Docker container management for VS Code",
+  "name": "devpulse",
+  "displayName": "DevPulse",
+  "description": "Real-time GPU, CPU, RAM monitoring with container resource tracking for VS Code",
+  "icon": "images/icon.png",
   "version": "1.0.2",
   "publisher": "ANISOFT",
   "license": "SEE LICENSE IN LICENSE",
@@ -28,12 +29,16 @@
     "system",
     "vram",
     "cpu",
-    "ram"
+    "ram",
+    "devpulse",
+    "process",
+    "container",
+    "resource"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
-      "title": "Docker Monitor",
+      "title": "DevPulse",
       "properties": {
         "dockerMonitor.refreshInterval": {
           "type": "number",
@@ -63,8 +68,8 @@
       "activitybar": [
         {
           "id": "dockerMonitor",
-          "title": "Docker Monitor",
-          "icon": "$(server-process)"
+          "title": "DevPulse",
+          "icon": "images/sidebar-icon.svg"
         }
       ]
     },

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DevPulse Icon Preview</title>
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #0d0d0d;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #ccc;
+    }
+    h1 { color: #4EC9B0; font-weight: 300; margin-bottom: 40px; }
+    .previews {
+      display: flex;
+      gap: 60px;
+      align-items: end;
+    }
+    .preview {
+      text-align: center;
+    }
+    .preview img {
+      display: block;
+      margin: 0 auto 12px;
+    }
+    .label {
+      font-size: 13px;
+      opacity: 0.6;
+    }
+    .separator {
+      width: 1px;
+      height: 140px;
+      background: #333;
+    }
+    /* For PNG screenshot: position the 128px version alone */
+    .screenshot-target {
+      /* Open this HTML, right-click the 128px icon, "Save image as" or take a screenshot */
+    }
+  </style>
+</head>
+<body>
+  <h1>DevPulse Icon Preview</h1>
+  <div class="previews">
+    <div class="preview">
+      <img src="icon.svg" width="128" height="128" class="screenshot-target" alt="DevPulse icon 128px">
+      <div class="label">128 x 128</div>
+    </div>
+    <div class="separator"></div>
+    <div class="preview">
+      <img src="icon.svg" width="64" height="64" alt="DevPulse icon 64px">
+      <div class="label">64 x 64</div>
+    </div>
+    <div class="separator"></div>
+    <div class="preview">
+      <img src="icon.svg" width="32" height="32" alt="DevPulse icon 32px">
+      <div class="label">32 x 32</div>
+    </div>
+    <div class="separator"></div>
+    <div class="preview">
+      <img src="icon.svg" width="16" height="16" alt="DevPulse icon 16px">
+      <div class="label">16 x 16</div>
+    </div>
+  </div>
+  <p style="margin-top: 50px; font-size: 12px; opacity: 0.4;">
+    To create a PNG: open this page in a browser, right-click the 128px icon, and save as PNG.<br>
+    Or use a tool like <code>rsvg-convert icon.svg -w 128 -h 128 -o icon.png</code>
+  </p>
+</body>
+</html>
