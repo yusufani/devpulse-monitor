@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.2](https://github.com/yusufani/vscode-docker-monitor/compare/v1.0.1...v1.0.2) (2026-03-10)
+
+
+### Bug Fixes
+
+* prevent update view from executing when the webview is not initialized ([d741655](https://github.com/yusufani/vscode-docker-monitor/commit/d74165512517477f73ab4fdbc26758f250ee02ba))
+* update VSIX paths in CI workflows to ensure correct artifact handling ([568fbc8](https://github.com/yusufani/vscode-docker-monitor/commit/568fbc8bd4a3a3e226a18367f04bb72c1dc1edb4))
+
 ## [1.0.1](https://github.com/yusufani/vscode-docker-monitor/compare/v1.0.0...v1.0.1) (2026-03-09)
 
 
