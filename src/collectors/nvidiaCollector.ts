@@ -1,25 +1,30 @@
-import { readFile } from "fs/promises";
+import { readFileSync } from "fs";
 import { IGpuCollector } from "./interfaces";
 import { GpuInfo, GpuProcess } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
 import { log } from "../utils/logger";
 
-async function readProcFile(path: string): Promise<string> {
+function readProcFile(filePath: string): string {
   try {
-    return await readFile(path, "utf-8");
+    return readFileSync(filePath, "utf-8");
   } catch {
     return "";
   }
 }
 
+/** Returns true if host /proc is accessible (i.e. we're not in a PID-namespaced container) */
+function canAccessHostProc(pid: number): boolean {
+  return readProcFile(`/proc/${pid}/status`).length > 0;
+}
+
 // UID resolution cache
 let _uidMap: Map<number, string> | null = null;
 
-async function resolveUid(uid: number): Promise<string> {
+function resolveUidFromPasswd(uid: number): string {
   if (!_uidMap) {
     _uidMap = new Map();
     try {
-      const passwd = await readProcFile("/etc/passwd");
+      const passwd = readProcFile("/etc/passwd");
       for (const line of passwd.split("\n")) {
         const p = line.split(":");
         if (p.length >= 3) _uidMap.set(parseInt(p[2]), p[0]);
@@ -31,12 +36,14 @@ async function resolveUid(uid: number): Promise<string> {
   return _uidMap.get(uid) || `uid:${uid}`;
 }
 
-async function resolveContainer(
+// ── /proc-based resolution (works on host) ─────────────────────
+
+function resolveContainerFromProc(
   pid: number,
   cnameMap: Map<string, string>,
-): Promise<{ id: string; name: string }> {
+): { id: string; name: string } {
   try {
-    const cgroup = await readProcFile(`/proc/${pid}/cgroup`);
+    const cgroup = readProcFile(`/proc/${pid}/cgroup`);
     let cid = "";
     for (const segment of cgroup.split(/[/\n]/)) {
       const s = segment.trim();
@@ -59,44 +66,93 @@ async function resolveContainer(
   }
 }
 
-async function getProcessDetail(
+function getProcessDetailFromProc(
   pid: number,
-): Promise<{ cmdline: string; cwd: string; ramMib: number; uid: number }> {
-  let cmdline = "",
-    cwd = "",
-    ramMib = 0,
-    uid = -1;
+): { cmdline: string; cwd: string; ramMib: number; uid: number } {
+  let cmdline = "", cwd = "", ramMib = 0, uid = -1;
+
+  const raw = readProcFile(`/proc/${pid}/cmdline`);
+  if (raw) cmdline = raw.replace(/\0/g, " ").trim();
 
   try {
-    const raw = await readProcFile(`/proc/${pid}/cmdline`);
-    cmdline = raw.replace(/\0/g, " ").trim();
+    // cwd via readlink is sync-safe but we need exec for symlink
+    const { readlinkSync } = require("fs");
+    cwd = readlinkSync(`/proc/${pid}/cwd`);
   } catch {
     // no access
   }
 
-  try {
-    const { stdout } = await execCommand(`readlink -f /proc/${pid}/cwd 2>/dev/null`, { timeout: 3000 });
-    cwd = stdout.trim();
-  } catch {
-    // no access
-  }
-
-  try {
-    const status = await readProcFile(`/proc/${pid}/status`);
+  const status = readProcFile(`/proc/${pid}/status`);
+  if (status) {
     const ramMatch = status.match(/VmRSS:\s+(\d+)\s+kB/);
     if (ramMatch) ramMib = Math.round(parseInt(ramMatch[1]) / 1024);
     const uidMatch = status.match(/Uid:\s+(\d+)/);
     if (uidMatch) uid = parseInt(uidMatch[1]);
-  } catch {
-    // no access
   }
 
   return { cmdline, cwd, ramMib, uid };
 }
 
+// ── docker-based resolution (fallback for container environments) ──
+
+interface DockerPidMap {
+  pidToContainer: Map<number, { id: string; name: string }>;
+  pidToUser: Map<number, string>;
+}
+
+async function buildDockerPidMap(
+  docker: string,
+  cnameMap: Map<string, string>,
+): Promise<DockerPidMap> {
+  const pidToContainer = new Map<number, { id: string; name: string }>();
+  const pidToUser = new Map<number, string>();
+
+  try {
+    // Get all container IDs
+    const { stdout } = await execCommand(`${docker} ps --no-trunc --format "{{.ID}}|{{.Names}}"`);
+    const lines = stdout.trim().split("\n").filter((l) => l.includes("|"));
+
+    // For each container, get its PIDs and users via docker top
+    const promises = lines.map(async (line) => {
+      const [fullId, name] = line.split("|", 2);
+      const cid = fullId.substring(0, 12);
+      try {
+        const { stdout: topOut } = await execCommand(
+          `${docker} top ${cid} aux`,
+          { timeout: 5000 },
+        );
+        const topLines = topOut.trim().split("\n");
+        // Skip header (first line)
+        for (let i = 1; i < topLines.length; i++) {
+          const parts = topLines[i].trim().split(/\s+/);
+          if (parts.length >= 2) {
+            const user = parts[0];
+            const pid = parseInt(parts[1]);
+            if (!isNaN(pid)) {
+              pidToContainer.set(pid, { id: cid, name: cnameMap.get(cid) || name });
+              pidToUser.set(pid, user);
+            }
+          }
+        }
+      } catch {
+        // container may have stopped
+      }
+    });
+
+    await Promise.all(promises);
+  } catch (e) {
+    log(`[pidmap] buildDockerPidMap failed: ${e}`);
+  }
+
+  return { pidToContainer, pidToUser };
+}
+
+// ── NvidiaCollector ────────────────────────────────────────────
+
 export class NvidiaCollector implements IGpuCollector {
   private smiPath: string | null = null;
   private uuidToIndex = new Map<string, number>();
+  private _procAccessible: boolean | null = null;
 
   async isAvailable(): Promise<boolean> {
     this.smiPath = await findBinary("nvidia-smi");
@@ -108,7 +164,6 @@ export class NvidiaCollector implements IGpuCollector {
     const gpus: GpuInfo[] = [];
 
     try {
-      // Batched: GPU info + UUID in one query (was 2 separate calls before)
       const { stdout } = await execCommand(
         `${this.smiPath} --query-gpu=index,name,memory.used,memory.total,memory.free,utilization.gpu,temperature.gpu,power.draw,uuid --format=csv,noheader,nounits`,
       );
@@ -158,27 +213,62 @@ export class NvidiaCollector implements IGpuCollector {
       }
       rawProcs.sort((a, b) => b.mem - a.mem);
 
-      const detailPromises = rawProcs.map(async (r) => {
-        const container = await resolveContainer(r.pid, containerNameMap);
-        const detail = await getProcessDetail(r.pid);
-        const username = detail.uid >= 0 ? await resolveUid(detail.uid) : "?";
-        return {
-          pid: r.pid,
-          gpuIndex: r.gpuIdx,
-          memMib: r.mem,
-          processName: r.pname.split("/").pop() || r.pname,
-          containerId: container.id,
-          containerName: container.name,
-          cmdline: detail.cmdline || r.pname,
-          cwd: detail.cwd || "?",
-          cpuPercent: 0,
-          ramMib: detail.ramMib,
-          uid: detail.uid,
-          username,
-        } as GpuProcess;
-      });
+      if (rawProcs.length === 0) return [];
 
-      processes.push(...(await Promise.all(detailPromises)));
+      // Check if /proc is accessible (cache result)
+      if (this._procAccessible === null) {
+        this._procAccessible = canAccessHostProc(rawProcs[0].pid);
+        if (!this._procAccessible) {
+          log("[nvidia] /proc not accessible, using docker fallback for process resolution");
+        }
+      }
+
+      if (this._procAccessible) {
+        // Fast path: direct /proc access
+        const detailPromises = rawProcs.map(async (r) => {
+          const container = resolveContainerFromProc(r.pid, containerNameMap);
+          const detail = getProcessDetailFromProc(r.pid);
+          const username = detail.uid >= 0 ? resolveUidFromPasswd(detail.uid) : "?";
+          return {
+            pid: r.pid,
+            gpuIndex: r.gpuIdx,
+            memMib: r.mem,
+            processName: r.pname.split("/").pop() || r.pname,
+            containerId: container.id,
+            containerName: container.name,
+            cmdline: detail.cmdline || r.pname,
+            cwd: detail.cwd || "?",
+            cpuPercent: 0,
+            ramMib: detail.ramMib,
+            uid: detail.uid,
+            username,
+          } as GpuProcess;
+        });
+        processes.push(...(await Promise.all(detailPromises)));
+      } else {
+        // Fallback: use docker top to build PID→container map
+        const docker = (await findBinary("docker")) || "docker";
+        const pidMap = await buildDockerPidMap(docker, containerNameMap);
+
+        for (const r of rawProcs) {
+          const container = pidMap.pidToContainer.get(r.pid) || { id: "", name: "host" };
+          const username = pidMap.pidToUser.get(r.pid) || "?";
+          processes.push({
+            pid: r.pid,
+            gpuIndex: r.gpuIdx,
+            memMib: r.mem,
+            processName: r.pname.split("/").pop() || r.pname,
+            containerId: container.id,
+            containerName: container.name,
+            cmdline: r.pname,
+            cwd: "?",
+            cpuPercent: 0,
+            ramMib: 0,
+            uid: -1,
+            username,
+          });
+        }
+      }
     } catch (e) {
       log(`nvidia-smi process query failed: ${e}`);
     }

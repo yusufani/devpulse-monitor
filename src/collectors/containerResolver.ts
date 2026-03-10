@@ -1,8 +1,8 @@
-import { readFile } from "fs/promises";
+import { readFileSync } from "fs";
 
-async function readProcFile(path: string): Promise<string> {
+function readProcFile(filePath: string): string {
   try {
-    return await readFile(path, "utf-8");
+    return readFileSync(filePath, "utf-8");
   } catch {
     return "";
   }
@@ -10,14 +10,16 @@ async function readProcFile(path: string): Promise<string> {
 
 /**
  * Resolves a PID to its container ID by parsing /proc/{pid}/cgroup.
- * Linux only — returns empty string on other platforms.
+ * Works when running on the host with access to host /proc.
+ * Returns empty id when /proc is not accessible (e.g. inside a container).
  */
-export async function resolveContainerFromPid(
+export function resolveContainerFromPid(
   pid: number,
   containerNameMap: Map<string, string>,
-): Promise<{ id: string; name: string }> {
+): { id: string; name: string } {
   try {
-    const cgroup = await readProcFile(`/proc/${pid}/cgroup`);
+    const cgroup = readProcFile(`/proc/${pid}/cgroup`);
+    if (!cgroup) return { id: "", name: "host" };
     let cid = "";
     for (const segment of cgroup.split(/[/\n]/)) {
       const s = segment.trim();

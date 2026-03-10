@@ -1,14 +1,15 @@
-import { readFile } from "fs/promises";
+import { readFileSync } from "fs";
 import * as os from "os";
 import { IDockerCollector } from "./interfaces";
 import { ContainerStats, ContainerFullInfo } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
 import { toMib } from "../utils/format";
 import { detectPlatform } from "../utils/platform";
+import { log } from "../utils/logger";
 
-async function readProcFile(path: string): Promise<string> {
+function readProcFile(filePath: string): string {
   try {
-    return await readFile(path, "utf-8");
+    return readFileSync(filePath, "utf-8");
   } catch {
     return "";
   }
@@ -21,7 +22,7 @@ async function resolveUid(uid: number): Promise<string> {
   if (!_uidMap) {
     _uidMap = new Map();
     try {
-      const passwd = await readProcFile("/etc/passwd");
+      const passwd = readProcFile("/etc/passwd");
       for (const line of passwd.split("\n")) {
         const p = line.split(":");
         if (p.length >= 3) _uidMap.set(parseInt(p[2]), p[0]);
@@ -58,8 +59,8 @@ export class DockerCollector implements IDockerCollector {
         const [cid, name] = line.split("|", 2);
         map.set(cid.substring(0, 12), name);
       }
-    } catch {
-      // docker not available or no containers
+    } catch (e) {
+      log(`[names] getContainerNames failed: ${e}`);
     }
     return map;
   }
@@ -83,27 +84,62 @@ export class DockerCollector implements IDockerCollector {
         .split("\n")
         .map((s) => parseInt(s.trim()) || 0);
 
+      // Resolve owners: try /proc first, fallback to docker top
+      const ownerMap = new Map<string, string>();
+      if (platform === "linux") {
+        // Try /proc-based resolution (works when running on host)
+        let procWorks = false;
+        if (pids[0] > 0) {
+          const testStatus = readProcFile(`/proc/${pids[0]}/status`);
+          procWorks = testStatus.length > 0;
+        }
+
+        if (procWorks) {
+          for (let i = 0; i < lines.length; i++) {
+            const name = lines[i].split("|", 2)[1];
+            const pid = pids[i] || 0;
+            if (pid > 0) {
+              const status = readProcFile(`/proc/${pid}/status`);
+              const uidMatch = status.match(/Uid:\s+(\d+)/);
+              if (uidMatch) {
+                ownerMap.set(name, await resolveUid(parseInt(uidMatch[1])));
+              }
+            }
+          }
+        } else {
+          // /proc not accessible (running inside container) — use docker top
+          log("[owner] /proc not accessible, using docker top fallback");
+          const topPromises = lines.map(async (line) => {
+            const [id, name] = line.split("|", 2);
+            try {
+              const { stdout: topOut } = await execCommand(
+                `${this.docker} top ${id.substring(0, 12)} aux`,
+                { timeout: 5000 },
+              );
+              // Parse USER from second line (first is header): USER PID %CPU ...
+              const topLines = topOut.trim().split("\n");
+              if (topLines.length >= 2) {
+                const user = topLines[1].trim().split(/\s+/)[0];
+                if (user) ownerMap.set(name, user);
+              }
+            } catch {
+              // skip — owner stays "?"
+            }
+          });
+          await Promise.all(topPromises);
+        }
+      }
+
       const results: ContainerFullInfo[] = [];
       for (let i = 0; i < lines.length; i++) {
         const [fullId, name] = lines[i].split("|", 2);
         const pid = pids[i] || 0;
-        let ownerUid = -1,
-          ownerName = "?";
-
-        // PID-based owner resolution only works on Linux
-        if (platform === "linux" && pid > 0) {
-          const status = await readProcFile(`/proc/${pid}/status`);
-          const uidMatch = status.match(/Uid:\s+(\d+)/);
-          if (uidMatch) {
-            ownerUid = parseInt(uidMatch[1]);
-            ownerName = await resolveUid(ownerUid);
-          }
-        }
-
-        results.push({ id: fullId.substring(0, 12), name, mainPid: pid, ownerUid, ownerName });
+        const ownerName = ownerMap.get(name) || "?";
+        results.push({ id: fullId.substring(0, 12), name, mainPid: pid, ownerUid: -1, ownerName });
       }
       return results;
-    } catch {
+    } catch (e) {
+      log(`[containers] getAllRunningContainers failed: ${e}`);
       return [];
     }
   }
@@ -136,8 +172,8 @@ export class DockerCollector implements IDockerCollector {
           memPercent: memPct,
         });
       }
-    } catch {
-      // docker stats failed
+    } catch (e) {
+      log(`[stats] getContainerStats failed: ${e}`);
     }
 
     this.cachedStats = map;
