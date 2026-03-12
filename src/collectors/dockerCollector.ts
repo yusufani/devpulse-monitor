@@ -31,7 +31,19 @@ async function resolveUid(uid: number): Promise<string> {
       // no passwd file
     }
   }
-  return _uidMap.get(uid) || `uid:${uid}`;
+  if (_uidMap.has(uid)) return _uidMap.get(uid)!;
+  // macOS fallback: /etc/passwd may not contain all users
+  try {
+    const { stdout } = await execCommand(`id -un ${uid}`, { timeout: 3000 });
+    const name = stdout.trim();
+    if (name) {
+      _uidMap.set(uid, name);
+      return name;
+    }
+  } catch {
+    // id command failed
+  }
+  return `uid:${uid}`;
 }
 
 const STATS_CACHE_TTL = 25_000;
@@ -88,7 +100,7 @@ export class DockerCollector implements IDockerCollector {
 
       // Resolve owners: try /proc first, fallback to docker top
       const ownerMap = new Map<string, string>();
-      if (platform === "linux") {
+      if (platform === "linux" || platform === "darwin") {
         // Try /proc-based resolution (works when running on host)
         let procWorks = false;
         if (pids[0] > 0) {
@@ -135,13 +147,31 @@ export class DockerCollector implements IDockerCollector {
               }
 
               // Fallback: docker top for main process user
-              const { stdout: topOut } = await execCommand(
-                `${this.docker} top ${cid} -eo pid,user`,
-                { timeout: 5000 },
-              );
+              // macOS Docker Desktop uses BSD ps (-o not -eo)
+              const topCmd = platform === "darwin"
+                ? `${this.docker} top ${cid} -o pid,user`
+                : `${this.docker} top ${cid} -eo pid,user`;
+              let topOut = "";
+              try {
+                const result = await execCommand(topCmd, { timeout: 5000 });
+                topOut = result.stdout;
+              } catch {
+                // Fallback to default docker top format
+                const result = await execCommand(
+                  `${this.docker} top ${cid}`,
+                  { timeout: 5000 },
+                );
+                topOut = result.stdout;
+              }
               const topLines = topOut.trim().split("\n");
               if (topLines.length >= 2) {
-                const user = topLines[1].trim().split(/\s+/)[1] || topLines[1].trim().split(/\s+/)[0];
+                // Parse USER column from header position
+                const header = topLines[0];
+                const userIdx = header.split(/\s+/).findIndex(
+                  (h) => h.toUpperCase() === "USER" || h.toUpperCase() === "UID",
+                );
+                const user = topLines[1].trim().split(/\s+/)[userIdx >= 0 ? userIdx : 1]
+                  || topLines[1].trim().split(/\s+/)[0];
                 if (user) {
                   // Resolve numeric UIDs
                   const numericUid = parseInt(user);

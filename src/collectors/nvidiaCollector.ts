@@ -2,6 +2,7 @@ import { readFileSync } from "fs";
 import { IGpuCollector } from "./interfaces";
 import { GpuInfo, GpuProcess } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
+import { detectPlatform } from "../utils/platform";
 import { log } from "../utils/logger";
 
 function readProcFile(filePath: string): string {
@@ -34,6 +35,23 @@ function resolveUidFromPasswd(uid: number): string {
     }
   }
   return _uidMap.get(uid) || `uid:${uid}`;
+}
+
+async function resolveUidAsync(uid: number): Promise<string> {
+  const cached = resolveUidFromPasswd(uid);
+  if (!cached.startsWith("uid:")) return cached;
+  // macOS fallback: /etc/passwd may not contain all users
+  try {
+    const { stdout } = await execCommand(`id -un ${uid}`, { timeout: 3000 });
+    const name = stdout.trim();
+    if (name && _uidMap) {
+      _uidMap.set(uid, name);
+      return name;
+    }
+  } catch {
+    // id command failed
+  }
+  return cached;
 }
 
 // ── /proc-based resolution (works on host) ─────────────────────
@@ -124,10 +142,23 @@ async function buildDockerPidMap(
       const [fullId, name] = line.split("|", 2);
       const cid = fullId.substring(0, 12);
       try {
-        const { stdout: topOut } = await execCommand(
-          `${docker} top ${cid} -eo pid,user,uid,rss,args`,
-          { timeout: 5000 },
-        );
+        const platform = detectPlatform();
+        // macOS Docker Desktop uses BSD ps (-o not -eo)
+        const topCmd = platform === "darwin"
+          ? `${docker} top ${cid} -o pid,user,uid,rss,args`
+          : `${docker} top ${cid} -eo pid,user,uid,rss,args`;
+        let topOut = "";
+        try {
+          const result = await execCommand(topCmd, { timeout: 5000 });
+          topOut = result.stdout;
+        } catch {
+          // Fallback to default docker top format
+          const result = await execCommand(
+            `${docker} top ${cid}`,
+            { timeout: 5000 },
+          );
+          topOut = result.stdout;
+        }
         const topLines = topOut.trim().split("\n");
         if (topLines.length < 2) return;
 
@@ -257,7 +288,7 @@ export class NvidiaCollector implements IGpuCollector {
         const detailPromises = rawProcs.map(async (r) => {
           const container = resolveContainerFromProc(r.pid, containerNameMap);
           const detail = getProcessDetailFromProc(r.pid);
-          const username = detail.uid >= 0 ? resolveUidFromPasswd(detail.uid) : "?";
+          const username = detail.uid >= 0 ? await resolveUidAsync(detail.uid) : "?";
           return {
             pid: r.pid,
             gpuIndex: r.gpuIdx,
