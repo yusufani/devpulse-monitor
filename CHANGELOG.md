@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/yusufani/vscode-docker-monitor/compare/v1.2.1...v1.3.0) (2026-03-12)
+
+
+### Features
+
+* Enhance GPU monitoring with historical data and incremental updates ([a4b123e](https://github.com/yusufani/vscode-docker-monitor/commit/a4b123eee73fbcdc635fac9d66a67f80d0fa88fa))
+
 ## [1.2.1](https://github.com/yusufani/vscode-docker-monitor/compare/v1.2.0...v1.2.1) (2026-03-10)
 
 
