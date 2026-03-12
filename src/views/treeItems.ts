@@ -99,7 +99,10 @@ export class SystemItem extends vscode.TreeItem {
 }
 
 export class GpuItem extends vscode.TreeItem {
-  constructor(public readonly gpu: GpuInfo) {
+  constructor(
+    public readonly gpu: GpuInfo,
+    history?: Array<{ timestamp: number; gpus: Array<{ index: number; memUsed: number; memTotal: number; util: number; temp: number }> }>,
+  ) {
     const pct = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * 100) : 0;
     super(`GPU ${gpu.index}`, vscode.TreeItemCollapsibleState.Expanded);
     this.description = `${gpu.name} · ${fmtMem(gpu.memUsed)}/${fmtMem(gpu.memTotal)} · ${gpu.temp}\u00B0C`;
@@ -108,9 +111,33 @@ export class GpuItem extends vscode.TreeItem {
     const md = new vscode.MarkdownString("", true);
     md.supportHtml = true;
     md.isTrusted = true;
+
+    // Build SVG sparklines from history data (no extra commands)
+    let sparklineHtml = "";
+    if (history && history.length >= 2) {
+      const points = history.map((h) => h.gpus.find((g) => g.index === gpu.index)).filter(Boolean) as Array<{ memUsed: number; memTotal: number; util: number; temp: number }>;
+      if (points.length >= 2) {
+        const w = 200, h = 24;
+        const stepX = w / (points.length - 1);
+        const mkPath = (vals: number[], max: number, color: string) => {
+          const d = vals.map((v, i) => `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(1)},${(h - (Math.min(v, max) / max) * h).toFixed(1)}`).join(" ");
+          return `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+        };
+        const vramPcts = points.map((p) => p.memTotal > 0 ? (p.memUsed / p.memTotal) * 100 : 0);
+        const utils = points.map((p) => p.util);
+        const temps = points.map((p) => p.temp);
+        sparklineHtml = `<div style="margin:4px 0"><svg width="${w}" height="${h}" style="display:block">` +
+          mkPath(vramPcts, 100, "#4ec9b0") +
+          mkPath(utils, 100, "#dcdcaa") +
+          mkPath(temps, 100, "#f44747") +
+          `</svg><div style="font-size:10px;color:#888"><span style="color:#4ec9b0">\u2500 VRAM</span> <span style="color:#dcdcaa">\u2500 Util</span> <span style="color:#f44747">\u2500 Temp</span></div></div>`;
+      }
+    }
+
     md.value = `<div style="font-family:monospace"><strong>GPU ${gpu.index}: ${gpu.name}</strong><br>` +
       `VRAM: ${fmtMem(gpu.memUsed)} / ${fmtMem(gpu.memTotal)} (${pct}%)<br>` +
-      `Temp: ${gpu.temp}\u00B0C · Power: ${gpu.power.toFixed(0)}W · Util: ${gpu.util}%</div>`;
+      `Temp: ${gpu.temp}\u00B0C · Power: ${gpu.power.toFixed(0)}W · Util: ${gpu.util}%` +
+      sparklineHtml + `</div>`;
     this.tooltip = md;
   }
 }
@@ -189,8 +216,13 @@ export class ContainerItem extends vscode.TreeItem {
     public readonly gpuProcCount: number,
     stats?: ContainerStats,
   ) {
+    // Health badge in label
+    const healthBadge = container.health === "healthy" ? " \u2705"
+      : container.health === "unhealthy" ? " \u274C"
+      : container.health === "starting" ? " \u23F3"
+      : "";
     super(
-      container.name,
+      container.name + healthBadge,
       gpuProcCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
     );
     const parts: string[] = [];
@@ -200,14 +232,21 @@ export class ContainerItem extends vscode.TreeItem {
       parts.push(`RAM ${fmtMem(stats.memUsedMib)}`);
     }
     if (gpuIndices.length > 0) parts.push(`GPU ${gpuIndices.join(",")}`);
+    if (container.uptime) parts.push(container.uptime);
     this.description = parts.join(" · ") || "starting...";
     const hasGpu = gpuVram > 0;
-    this.iconPath = new vscode.ThemeIcon(
-      "package",
-      hasGpu ? new vscode.ThemeColor("terminal.ansiCyan") : new vscode.ThemeColor("terminal.ansiGreen"),
-    );
+    const iconColor = container.health === "unhealthy" ? "errorForeground"
+      : hasGpu ? "terminal.ansiCyan"
+      : "terminal.ansiGreen";
+    this.iconPath = new vscode.ThemeIcon("package", new vscode.ThemeColor(iconColor));
     this.contextValue = "gpuContainer";
-    this.tooltip = `${container.name}\nOwner: ${container.ownerName}\n${parts.join("\n")}`;
+
+    const tooltipParts = [`${container.name}`, `Owner: ${container.ownerName}`];
+    if (container.composeProject) tooltipParts.push(`Compose: ${container.composeProject}`);
+    if (container.health !== "none") tooltipParts.push(`Health: ${container.health}`);
+    if (container.uptime) tooltipParts.push(`Uptime: ${container.uptime}`);
+    tooltipParts.push(...parts.filter((p) => !p.includes(container.uptime)));
+    this.tooltip = tooltipParts.join("\n");
   }
 }
 

@@ -29,9 +29,10 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
   private containers: ContainerFullInfo[] = [];
   private containerStats = new Map<string, ContainerStats>();
   private hasGpu = false;
+  private gpuHistory: Array<{ timestamp: number; gpus: Array<{ index: number; memUsed: number; memTotal: number; util: number; temp: number }> }> = [];
   private subscription: vscode.Disposable;
 
-  constructor(monitor: MonitorService) {
+  constructor(private monitor: MonitorService) {
     this.subscription = monitor.onDataUpdated((data) => {
       this.system = data.system;
       this.containers = data.containers;
@@ -39,6 +40,7 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
       this.gpuProcesses = data.gpuData.processes;
       this.containerStats = data.gpuData.containerStats;
       this.hasGpu = data.gpuData.gpus.length > 0;
+      this.gpuHistory = monitor.getGpuHistory();
       this._onDidChangeTreeData.fire(undefined);
     });
   }
@@ -70,7 +72,7 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
         vramColor(totalPct),
       ));
     }
-    for (const gpu of this.gpus) items.push(new GpuItem(gpu));
+    for (const gpu of this.gpus) items.push(new GpuItem(gpu, this.gpuHistory));
     if (this.hasGpu) items.push(new OpenMonitorItem());
     return items;
   }
@@ -154,18 +156,27 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
 
   private getContainerChildren(el: ContainerItem): SidebarItem[] {
     const items: SidebarItem[] = [];
+    if (el.container.image) {
+      items.push(new ContainerInfoItem(`Image: ${el.container.image}`, "symbol-package"));
+    }
     items.push(new ContainerInfoItem(`Owner: ${el.container.ownerName}`, "person"));
     if (el.gpuIndices.length > 0) {
       items.push(new ContainerInfoItem(`GPU: ${el.gpuIndices.join(", ")}`, "pulse"));
     }
     const stats = this.containerStats.get(el.container.id);
     if (stats) {
+      const ramWarn = stats.memLimitMib > 0 && (stats.memUsedMib / stats.memLimitMib) * 100 > 85 ? " \u26A0" : "";
       items.push(
         new ContainerInfoItem(
-          `CPU: ${stats.cpuPercent.toFixed(1)}% · RAM: ${fmtMem(stats.memUsedMib)}/${fmtMem(stats.memLimitMib)}`,
+          `CPU: ${stats.cpuPercent.toFixed(1)}% · RAM: ${fmtMem(stats.memUsedMib)}/${fmtMem(stats.memLimitMib)}${ramWarn}`,
           "dashboard",
         ),
       );
+      if (stats.netIO) items.push(new ContainerInfoItem(`Net: ${stats.netIO}`, "cloud"));
+      if (stats.blockIO) items.push(new ContainerInfoItem(`Disk: ${stats.blockIO}`, "database"));
+    }
+    if (el.container.ports) {
+      items.push(new ContainerInfoItem(`Ports: ${el.container.ports}`, "plug"));
     }
     const procs = this.gpuProcesses.filter((p) => p.containerId === el.container.id);
     const seen = new Set<number>();

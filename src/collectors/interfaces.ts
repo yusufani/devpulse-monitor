@@ -1,4 +1,4 @@
-import { SystemInfo, GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo } from "../types";
+import { SystemInfo, GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo, ContainerInspect } from "../types";
 
 export interface ISystemCollector {
   collect(): Promise<SystemInfo>;
@@ -18,4 +18,5 @@ export interface IDockerCollector {
   stopContainer(containerId: string): Promise<void>;
   killContainer(containerId: string): Promise<void>;
   restartContainer(containerId: string): Promise<void>;
+  inspectContainer(containerId: string): Promise<ContainerInspect>;
 }

@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
 import { MonitorService } from "../../services/monitorService";
-import { getGpuMonitorHtml } from "./gpuMonitorHtml";
+import { getGpuMonitorHtml, buildGpuMonitorData } from "./gpuMonitorHtml";
 
 export class GpuMonitorPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private interval: ReturnType<typeof setInterval> | undefined;
   private refreshIntervalSec = 5;
+  private firstRender = true;
 
   constructor(
     private monitor: MonitorService,
@@ -23,6 +24,7 @@ export class GpuMonitorPanel implements vscode.Disposable {
 
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+      this.firstRender = true;
       if (this.interval) clearInterval(this.interval);
     });
 
@@ -58,6 +60,14 @@ export class GpuMonitorPanel implements vscode.Disposable {
             await this.monitor.restartContainer(msg.containerId);
             this.refresh();
           }
+        } else if (msg.command === "exec") {
+          vscode.commands.executeCommand("gpuMonitor.execContainer", msg.containerId, msg.name);
+        } else if (msg.command === "logs") {
+          const terminal = vscode.window.createTerminal(`Logs: ${msg.name}`);
+          terminal.sendText(`docker logs -f --tail 100 ${msg.containerId}`);
+          terminal.show();
+        } else if (msg.command === "attach") {
+          vscode.commands.executeCommand("gpuMonitor.attachContainer", msg.containerId, msg.name);
         } else if (msg.command === "refresh") {
           this.refresh();
         }
@@ -66,6 +76,7 @@ export class GpuMonitorPanel implements vscode.Disposable {
       }
     });
 
+    this.firstRender = true;
     this.refresh();
     this.refreshIntervalSec = vscode.workspace
       .getConfiguration("dockerMonitor")
@@ -75,12 +86,23 @@ export class GpuMonitorPanel implements vscode.Disposable {
 
   async refresh(): Promise<void> {
     await this.monitor.refresh();
-    if (this.panel) {
+    if (!this.panel) return;
+
+    if (this.firstRender) {
       this.panel.webview.html = getGpuMonitorHtml(
         this.monitor.getGpuData(),
         this.refreshIntervalSec,
         this.monitor.getGpuHistory(),
       );
+      this.firstRender = false;
+    } else {
+      // Send JSON data for incremental DOM updates
+      const data = buildGpuMonitorData(
+        this.monitor.getGpuData(),
+        this.refreshIntervalSec,
+        this.monitor.getGpuHistory(),
+      );
+      this.panel.webview.postMessage({ type: "update", ...data });
     }
   }
 

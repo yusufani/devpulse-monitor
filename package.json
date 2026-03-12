@@ -3,7 +3,7 @@
   "displayName": "DevPulse Monitor - CPU RAM GPU Docker Monitor",
   "description": "Real-time GPU, CPU, RAM monitoring with container resource tracking for VS Code",
   "icon": "images/icon.png",
-  "version": "1.2.1",
+  "version": "1.2.4",
   "publisher": "ANISOFT",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
@@ -126,6 +126,51 @@
         "command": "gpuMonitor.showContainerLogs",
         "title": "Show Container Logs",
         "icon": "$(output)"
+      },
+      {
+        "command": "gpuMonitor.execContainer",
+        "title": "Exec into Container",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "gpuMonitor.attachContainer",
+        "title": "Attach to Container",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "gpuMonitor.showTopConsumers",
+        "title": "DevPulse: Show Top GPU Consumers"
+      },
+      {
+        "command": "gpuMonitor.findContainer",
+        "title": "DevPulse: Find Container"
+      },
+      {
+        "command": "gpuMonitor.copyContainerId",
+        "title": "Copy Container ID"
+      },
+      {
+        "command": "gpuMonitor.copyContainerName",
+        "title": "Copy Container Name"
+      },
+      {
+        "command": "gpuMonitor.copyContainerImage",
+        "title": "Copy Container Image"
+      },
+      {
+        "command": "gpuMonitor.openPort",
+        "title": "Open Port in Browser",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "gpuMonitor.showEnvVars",
+        "title": "Show Environment Variables",
+        "icon": "$(symbol-variable)"
+      },
+      {
+        "command": "gpuMonitor.showVolumes",
+        "title": "Show Volume Mounts",
+        "icon": "$(folder-library)"
       }
     ],
     "menus": {
@@ -169,9 +214,58 @@
         {
           "command": "gpuMonitor.showContainerLogs",
           "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.execContainer",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.attachContainer",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.openPort",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.showEnvVars",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.showVolumes",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.copyContainerId",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.copyContainerName",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.copyContainerImage",
+          "when": "view == gpuMonitor && viewItem == gpuContainer"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "gpuMonitor.show",
+        "key": "ctrl+shift+g",
+        "mac": "cmd+shift+g"
+      },
+      {
+        "command": "gpuMonitor.findContainer",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d"
+      },
+      {
+        "command": "gpuMonitor.showTopConsumers",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t"
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p ./",

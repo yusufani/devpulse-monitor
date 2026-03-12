@@ -3,14 +3,24 @@ import { MonitorService } from "../services/monitorService";
 import { MonitorData } from "../types";
 
 interface ContainerRow {
+  id: string;
   name: string;
   owner: string;
+  health: string;
+  composeProject: string;
+  uptime: string;
+  image: string;
+  ports: string;
   vram: number;
   gpuIdx: string;
+  gpuBreakdown: Array<{ gpuIndex: number; vram: number }>;
+  gpuUtil: number;
   cpuPct: number;
   ramMib: number;
   ramLimitMib: number;
   ramPct: number;
+  netIO: string;
+  blockIO: string;
   hasStats: boolean;
   hasGpu: boolean;
 }
@@ -19,6 +29,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   public static readonly viewType = "dockerServices";
   private _view?: vscode.WebviewView;
   private _subscription: vscode.Disposable;
+  private _firstRender = true;
 
   constructor(private readonly monitor: MonitorService) {
     this._subscription = monitor.onDataUpdated(() => {
@@ -30,18 +41,46 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     this._view = webviewView;
     webviewView.webview.options = { enableScripts: true };
 
+    webviewView.webview.onDidReceiveMessage(async (msg) => {
+      if (msg.command === "exec") {
+        vscode.commands.executeCommand("gpuMonitor.execContainer", msg.containerId, msg.name);
+      } else if (msg.command === "logs") {
+        const terminal = vscode.window.createTerminal(`Logs: ${msg.name}`);
+        terminal.sendText(`docker logs -f --tail 100 ${msg.containerId}`);
+        terminal.show();
+      } else if (msg.command === "attach") {
+        vscode.commands.executeCommand("gpuMonitor.attachContainer", msg.containerId, msg.name);
+      }
+    });
+
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
+        this._firstRender = true;
         this._updateView();
       }
     });
 
+    this._firstRender = true;
     this._updateView();
   }
 
   private _updateView(): void {
     if (!this._view) return;
-    this._view.webview.html = this._buildHtml();
+    const rows = this._buildRows();
+    const data: MonitorData = this.monitor.getLatestData();
+    const gpuIndices = data.gpuData.gpus.map((g) => g.index).sort((a, b) => a - b);
+
+    if (this._firstRender) {
+      this._view.webview.html = this._buildHtml(rows, gpuIndices);
+      this._firstRender = false;
+    } else {
+      // Incremental update via postMessage for smooth transitions
+      this._view.webview.postMessage({
+        type: "update",
+        rows: JSON.parse(JSON.stringify(rows)),
+        gpuIndices,
+      });
+    }
   }
 
   private _buildRows(): ContainerRow[] {
@@ -49,41 +88,77 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     const containers = data.containers;
     const gpuProcesses = data.gpuData.processes;
     const containerStats = data.gpuData.containerStats;
+    const gpus = data.gpuData.gpus;
 
-    const gpuByContainer = new Map<string, { vram: number; gpus: Set<number> }>();
+    // Build per-GPU utilization map
+    const gpuUtilMap = new Map<number, number>();
+    for (const g of gpus) {
+      gpuUtilMap.set(g.index, g.util);
+    }
+
+    const gpuByContainer = new Map<string, { vram: number; gpus: Set<number>; perGpu: Map<number, number>; vramByGpu: Map<number, number> }>();
     for (const p of gpuProcesses) {
       if (!p.containerId) continue;
       if (!gpuByContainer.has(p.containerId)) {
-        gpuByContainer.set(p.containerId, { vram: 0, gpus: new Set() });
+        gpuByContainer.set(p.containerId, { vram: 0, gpus: new Set(), perGpu: new Map(), vramByGpu: new Map() });
       }
       const entry = gpuByContainer.get(p.containerId)!;
       entry.vram += p.memMib;
       entry.gpus.add(p.gpuIndex);
+      entry.vramByGpu.set(p.gpuIndex, (entry.vramByGpu.get(p.gpuIndex) || 0) + p.memMib);
     }
 
     return containers.map((c) => {
       const gpu = gpuByContainer.get(c.id);
       const stats = containerStats.get(c.id);
+
+      // Build per-GPU VRAM breakdown
+      const gpuBreakdown: Array<{ gpuIndex: number; vram: number }> = [];
+      if (gpu) {
+        for (const [gpuIndex, vram] of gpu.vramByGpu) {
+          gpuBreakdown.push({ gpuIndex, vram });
+        }
+        gpuBreakdown.sort((a, b) => a.gpuIndex - b.gpuIndex);
+      }
+
+      // Weighted GPU util%: average util of GPUs this container uses
+      let gpuUtil = 0;
+      if (gpu && gpu.gpus.size > 0) {
+        let totalUtil = 0;
+        for (const gi of gpu.gpus) {
+          totalUtil += gpuUtilMap.get(gi) || 0;
+        }
+        gpuUtil = totalUtil / gpu.gpus.size;
+      }
+
       return {
+        id: c.id,
         name: c.name,
         owner: c.ownerName,
+        health: c.health,
+        composeProject: c.composeProject,
+        uptime: c.uptime,
+        image: c.image,
+        ports: c.ports,
         vram: gpu?.vram || 0,
         gpuIdx: gpu ? [...gpu.gpus].sort().join(",") : "",
+        gpuBreakdown,
+        gpuUtil,
         cpuPct: stats?.cpuPercent ?? 0,
         ramMib: stats?.memUsedMib ?? 0,
         ramLimitMib: stats?.memLimitMib ?? 0,
         ramPct: stats?.memPercent ?? 0,
+        netIO: stats?.netIO ?? "",
+        blockIO: stats?.blockIO ?? "",
         hasStats: !!stats,
         hasGpu: (gpu?.vram || 0) > 0,
       };
     });
   }
 
-  private _buildHtml(): string {
-    const rows = this._buildRows();
-
-    // Build JSON data for client-side sorting
+  private _buildHtml(rows: ContainerRow[], gpuIndices: number[]): string {
     const jsonData = JSON.stringify(rows);
+    const gpuIndicesJson = JSON.stringify(gpuIndices);
 
     return `<!DOCTYPE html>
 <html>
@@ -152,6 +227,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    transition: color 0.3s, background 0.3s;
   }
   td.name {
     max-width: 140px;
@@ -163,6 +239,11 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     font-size: 10px;
   }
   tr:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04)); }
+  tr { transition: opacity 0.3s ease; }
+  tr.fade-in { animation: fadeIn 0.3s ease forwards; }
+  tr.fade-out { animation: fadeOut 0.3s ease forwards; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; height: 0; } }
   .red { color: var(--vscode-errorForeground, #f44); }
   .yellow { color: var(--vscode-editorWarning-foreground, #cc0); }
   .cyan { color: #4ec9b0; }
@@ -172,6 +253,8 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     padding: 20px;
     opacity: 0.5;
   }
+  .changed { animation: pulse 0.6s ease; }
+  @keyframes pulse { 0% { background: rgba(78,201,176,0.15); } 100% { background: transparent; } }
   /* grouped view */
   .group-header {
     background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
@@ -186,6 +269,69 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   }
   .group-header .toggle { opacity: 0.5; margin-right: 4px; font-size: 9px; }
   .group-summary { opacity: 0.6; font-weight: normal; font-size: 10px; }
+  /* action buttons */
+  .act-btn {
+    background: none;
+    border: 1px solid var(--vscode-widget-border, #555);
+    color: var(--vscode-foreground);
+    font-size: 10px;
+    padding: 0px 4px;
+    border-radius: 2px;
+    cursor: pointer;
+    opacity: 0.5;
+    margin-left: 2px;
+  }
+  .act-btn:hover { opacity: 1; }
+  td.actions { white-space: nowrap; }
+  /* GPU util bar */
+  .util-bar {
+    display: inline-block;
+    width: 30px;
+    height: 8px;
+    background: #333;
+    border-radius: 2px;
+    overflow: hidden;
+    vertical-align: middle;
+    margin-right: 3px;
+  }
+  .util-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.5s ease;
+  }
+  .util-bar-fill.green { background: #4ec9b0; }
+  .util-bar-fill.yellow { background: #dcdcaa; }
+  .util-bar-fill.red { background: #f44747; }
+  /* health & metadata badges */
+  .health-ok, .health-bad, .health-wait { font-size: 9px; vertical-align: middle; }
+  .compose-tag {
+    display: inline-block;
+    font-size: 8px;
+    padding: 0 3px;
+    margin-left: 4px;
+    border-radius: 2px;
+    background: var(--vscode-badge-background, #4d4d4d);
+    color: var(--vscode-badge-foreground, #ccc);
+    vertical-align: middle;
+  }
+  .uptime {
+    display: inline-block;
+    font-size: 8px;
+    opacity: 0.4;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .image-tag {
+    display: inline-block;
+    font-size: 8px;
+    opacity: 0.35;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .io-cell {
+    font-size: 10px;
+    max-width: 90px;
+  }
 </style>
 </head>
 <body>
@@ -195,13 +341,17 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   </div>
   <table>
     <thead>
-      <tr>
+      <tr id="headerRow">
         <th data-col="name">Container <span class="arrow"></span></th>
         <th data-col="owner" id="ownerTh">Owner <span class="arrow"></span></th>
         <th data-col="vram">VRAM <span class="arrow"></span></th>
         <th data-col="gpuIdx">GPU <span class="arrow"></span></th>
+        <th data-col="gpuUtil">Util% <span class="arrow"></span></th>
         <th data-col="cpuPct">CPU <span class="arrow"></span></th>
         <th data-col="ramMib">RAM <span class="arrow"></span></th>
+        <th data-col="netIO">Net <span class="arrow"></span></th>
+        <th data-col="blockIO">Disk <span class="arrow"></span></th>
+        <th data-col="actions"></th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
@@ -209,11 +359,14 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
 
 <script>
 (function() {
-  const rows = ${jsonData};
+  const vscode = acquireVsCodeApi();
+  let rows = ${jsonData};
+  let gpuIndices = ${gpuIndicesJson};
   let sortCol = 'vram';
   let sortAsc = false;
   let grouped = false;
   const collapsedGroups = new Set();
+  let prevValues = new Map(); // track previous cell values for change detection
 
   const fmtMem = (mib) => {
     if (mib <= 0) return '\\u2014';
@@ -235,31 +388,110 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   }
 
   function cpuCls(v) { return v > 80 ? 'red' : v > 50 ? 'yellow' : ''; }
+  function utilCls(v) { return v > 80 ? 'red' : v > 50 ? 'yellow' : ''; }
   function ramCls(r) { return r.ramLimitMib > 0 && (r.ramMib / r.ramLimitMib) * 100 > 80 ? 'red' : ''; }
   function vramCls(r) { return r.hasGpu ? 'cyan' : 'dim'; }
 
+  function actionsHtml(r) {
+    return '<button class="act-btn" onclick="doCmd(\\'exec\\',\\'' + esc(r.id) + '\\',\\'' + esc(r.name) + '\\')" title="Exec">\\u25B6</button>' +
+      '<button class="act-btn" onclick="doCmd(\\'logs\\',\\'' + esc(r.id) + '\\',\\'' + esc(r.name) + '\\')" title="Logs">\\u2261</button>' +
+      '<button class="act-btn" onclick="doCmd(\\'attach\\',\\'' + esc(r.id) + '\\',\\'' + esc(r.name) + '\\')" title="Attach">\\u2192</button>';
+  }
+
+  function healthBadge(h) {
+    if (h === 'healthy') return '<span class="health-ok" title="healthy">\\u2705</span>';
+    if (h === 'unhealthy') return '<span class="health-bad" title="unhealthy">\\u274C</span>';
+    if (h === 'starting') return '<span class="health-wait" title="starting">\\u23F3</span>';
+    return '';
+  }
+
+  function ramLabel(r) {
+    if (!r.hasStats) return '\\u2014';
+    let label = fmtMem(r.ramMib);
+    if (r.ramLimitMib > 0) {
+      label += '/' + fmtMem(r.ramLimitMib);
+      const pct = (r.ramMib / r.ramLimitMib) * 100;
+      if (pct > 85) label += ' \\u26A0';
+    }
+    return label;
+  }
+
   function rowHtml(r, showOwner) {
-    return '<tr>' +
-      '<td class="name" title="' + esc(r.name) + '">' + esc(r.name) + '</td>' +
+    let perGpuCols = '';
+    if (gpuIndices.length > 1) {
+      for (const gi of gpuIndices) {
+        const bd = r.gpuBreakdown.find(b => b.gpuIndex === gi);
+        perGpuCols += '<td class="' + (bd && bd.vram > 0 ? 'cyan' : 'dim') + '">' + (bd && bd.vram > 0 ? fmtMem(bd.vram) : '\\u2014') + '</td>';
+      }
+    }
+    const utilPct = r.gpuUtil;
+    const utilBarCls = utilPct > 80 ? 'red' : utilPct > 50 ? 'yellow' : 'green';
+    const utilHtml = r.hasGpu ? '<span class="util-bar"><span class="util-bar-fill ' + utilBarCls + '" style="width:' + utilPct + '%"></span></span>' + utilPct.toFixed(0) + '%' : '\\u2014';
+    const badge = healthBadge(r.health);
+    const nameLabel = badge + ' ' + esc(r.name);
+    const uptimeHtml = r.uptime ? '<span class="uptime">' + esc(r.uptime) + '</span>' : '';
+    const composeHtml = r.composeProject ? '<span class="compose-tag">' + esc(r.composeProject) + '</span>' : '';
+    const imgShort = r.image ? r.image.replace(/^.*\\//, '').substring(0, 24) : '';
+    const tooltip = esc(r.name) + (r.image ? '\\n' + esc(r.image) : '') + (r.ports ? '\\nPorts: ' + esc(r.ports) : '') + (r.composeProject ? '\\n[' + esc(r.composeProject) + ']' : '');
+    return '<tr data-id="' + esc(r.id) + '">' +
+      '<td class="name" title="' + tooltip + '">' + nameLabel + composeHtml + uptimeHtml + (imgShort ? '<span class="image-tag">' + esc(imgShort) + '</span>' : '') + '</td>' +
       (showOwner ? '<td class="owner-cell">' + esc(r.owner) + '</td>' : '') +
       '<td class="' + vramCls(r) + '">' + (r.vram > 0 ? fmtMem(r.vram) : '\\u2014') + '</td>' +
+      perGpuCols +
       '<td class="' + vramCls(r) + '">' + (r.gpuIdx || '\\u2014') + '</td>' +
+      '<td class="' + utilCls(utilPct) + '">' + utilHtml + '</td>' +
       '<td class="' + cpuCls(r.cpuPct) + '">' + (r.hasStats ? r.cpuPct.toFixed(1) + '%' : '\\u2014') + '</td>' +
-      '<td class="' + ramCls(r) + '">' + (r.hasStats ? fmtMem(r.ramMib) : '\\u2014') + '</td>' +
+      '<td class="' + ramCls(r) + '">' + ramLabel(r) + '</td>' +
+      '<td class="io-cell dim">' + (r.netIO ? esc(r.netIO) : '\\u2014') + '</td>' +
+      '<td class="io-cell dim">' + (r.blockIO ? esc(r.blockIO) : '\\u2014') + '</td>' +
+      '<td class="actions">' + actionsHtml(r) + '</td>' +
       '</tr>';
   }
 
-  function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+  function buildHeaders() {
+    const headerRow = document.getElementById('headerRow');
+    let html = '<th data-col="name">Container <span class="arrow"></span></th>';
+    if (!grouped) html += '<th data-col="owner" id="ownerTh">Owner <span class="arrow"></span></th>';
+    html += '<th data-col="vram">VRAM <span class="arrow"></span></th>';
+    if (gpuIndices.length > 1) {
+      for (const gi of gpuIndices) {
+        html += '<th data-col="gpu' + gi + '">G' + gi + '</th>';
+      }
+    }
+    html += '<th data-col="gpuIdx">GPU <span class="arrow"></span></th>';
+    html += '<th data-col="gpuUtil">Util% <span class="arrow"></span></th>';
+    html += '<th data-col="cpuPct">CPU <span class="arrow"></span></th>';
+    html += '<th data-col="ramMib">RAM <span class="arrow"></span></th>';
+    html += '<th data-col="netIO">Net <span class="arrow"></span></th>';
+    html += '<th data-col="blockIO">Disk <span class="arrow"></span></th>';
+    html += '<th data-col="actions"></th>';
+    headerRow.innerHTML = html;
+
+    // Re-attach sort handlers
+    headerRow.querySelectorAll('th[data-col]').forEach(th => {
+      if (th.dataset.col === 'actions') return;
+      th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        if (sortCol === col) { sortAsc = !sortAsc; }
+        else { sortCol = col; sortAsc = col === 'name' || col === 'owner'; }
+        render();
+      });
+    });
+  }
 
   function render() {
     const tbody = document.getElementById('tbody');
     const countLabel = document.getElementById('countLabel');
-    const ownerTh = document.getElementById('ownerTh');
     countLabel.textContent = rows.length + ' container' + (rows.length !== 1 ? 's' : '');
+
+    buildHeaders();
 
     // Update sort arrows
     document.querySelectorAll('th[data-col]').forEach(th => {
       const arrow = th.querySelector('.arrow');
+      if (!arrow) return;
       if (th.dataset.col === sortCol) {
         arrow.textContent = sortAsc ? '\\u25B2' : '\\u25BC';
       } else {
@@ -268,25 +500,23 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     });
 
     const sorted = sortRows(rows);
+    const totalCols = 8 + (grouped ? 0 : 1) + (gpuIndices.length > 1 ? gpuIndices.length : 0) + 1;
 
     if (!grouped) {
-      ownerTh.style.display = '';
       let html = '';
       if (sorted.length === 0) {
-        html = '<tr><td colspan="6" class="empty">No containers running</td></tr>';
+        html = '<tr><td colspan="' + totalCols + '" class="empty">No containers running</td></tr>';
       } else {
         for (const r of sorted) html += rowHtml(r, true);
       }
       tbody.innerHTML = html;
     } else {
-      ownerTh.style.display = 'none';
       // Group by owner
       const groups = new Map();
       for (const r of sorted) {
         if (!groups.has(r.owner)) groups.set(r.owner, []);
         groups.get(r.owner).push(r);
       }
-      // Sort groups by total RAM desc
       const sortedGroups = [...groups.entries()].sort((a, b) => {
         const aTotal = a[1].reduce((s, r) => s + r.vram + r.ramMib, 0);
         const bTotal = b[1].reduce((s, r) => s + r.vram + r.ramMib, 0);
@@ -294,7 +524,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
       });
 
       let html = '';
-      const colSpan = 5; // no owner column
+      const colSpan = totalCols - 1; // no owner column
       for (const [owner, items] of sortedGroups) {
         const totalVram = items.reduce((s, r) => s + r.vram, 0);
         const totalRam = items.reduce((s, r) => s + r.ramMib, 0);
@@ -329,8 +559,9 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     }
   }
 
-  // Sort click handlers
+  // Sort click handlers (initial)
   document.querySelectorAll('th[data-col]').forEach(th => {
+    if (th.dataset.col === 'actions') return;
     th.addEventListener('click', () => {
       const col = th.dataset.col;
       if (sortCol === col) { sortAsc = !sortAsc; }
@@ -345,6 +576,21 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     grouped = !grouped;
     groupBtn.classList.toggle('active', grouped);
     render();
+  });
+
+  // Action button handler
+  window.doCmd = function(cmd, containerId, name) {
+    vscode.postMessage({ command: cmd, containerId: containerId, name: name });
+  };
+
+  // Listen for incremental updates
+  window.addEventListener('message', (event) => {
+    const msg = event.data;
+    if (msg.type === 'update') {
+      rows = msg.rows;
+      gpuIndices = msg.gpuIndices;
+      render();
+    }
   });
 
   render();

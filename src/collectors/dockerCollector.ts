@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import * as os from "os";
 import { IDockerCollector } from "./interfaces";
-import { ContainerStats, ContainerFullInfo } from "../types";
+import { ContainerStats, ContainerFullInfo, ContainerInspect } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
 import { toMib } from "../utils/format";
 import { detectPlatform } from "../utils/platform";
@@ -70,14 +70,16 @@ export class DockerCollector implements IDockerCollector {
     const platform = detectPlatform();
 
     try {
-      const { stdout } = await execCommand(`${this.docker} ps --no-trunc --format "{{.ID}}|{{.Names}}"`);
+      const { stdout } = await execCommand(
+        `${this.docker} ps --no-trunc --format "{{.ID}}|{{.Names}}|{{.Status}}|{{.Label \\"com.docker.compose.project\\"}}|{{.Image}}|{{.Ports}}"`,
+      );
       const lines = stdout
         .trim()
         .split("\n")
         .filter((l) => l.includes("|"));
       if (lines.length === 0) return [];
 
-      const ids = lines.map((l) => l.split("|")[0]);
+      const ids = lines.map((l) => l.split("|", 1)[0]);
       const { stdout: pidOut } = await execCommand(`${this.docker} inspect --format '{{.State.Pid}}' ${ids.join(" ")}`);
       const pids = pidOut
         .trim()
@@ -96,7 +98,7 @@ export class DockerCollector implements IDockerCollector {
 
         if (procWorks) {
           for (let i = 0; i < lines.length; i++) {
-            const name = lines[i].split("|", 2)[1];
+            const name = lines[i].split("|")[1];
             const pid = pids[i] || 0;
             if (pid > 0) {
               const status = readProcFile(`/proc/${pid}/status`);
@@ -107,20 +109,48 @@ export class DockerCollector implements IDockerCollector {
             }
           }
         } else {
-          // /proc not accessible (running inside container) — use docker top
-          log("[owner] /proc not accessible, using docker top fallback");
+          // /proc not accessible (running inside container)
+          log("[owner] /proc not accessible, using docker inspect + docker top fallback");
           const topPromises = lines.map(async (line) => {
-            const [id, name] = line.split("|", 2);
+            const parts = line.split("|");
+            const id = parts[0], name = parts[1];
+            const cid = id.substring(0, 12);
             try {
-              const { stdout: topOut } = await execCommand(
-                `${this.docker} top ${id.substring(0, 12)} aux`,
+              // First try docker inspect for configured user
+              const { stdout: inspectOut } = await execCommand(
+                `${this.docker} inspect --format '{{.Config.User}}' ${cid}`,
                 { timeout: 5000 },
               );
-              // Parse USER from second line (first is header): USER PID %CPU ...
+              const configUser = inspectOut.trim();
+              if (configUser && configUser !== "''" && configUser !== "''") {
+                // May be numeric UID like "1000" or "1000:1000" — resolve to name
+                const userPart = configUser.split(":")[0];
+                const numericUid = parseInt(userPart);
+                if (!isNaN(numericUid)) {
+                  ownerMap.set(name, await resolveUid(numericUid));
+                } else {
+                  ownerMap.set(name, userPart);
+                }
+                return;
+              }
+
+              // Fallback: docker top for main process user
+              const { stdout: topOut } = await execCommand(
+                `${this.docker} top ${cid} -eo pid,user`,
+                { timeout: 5000 },
+              );
               const topLines = topOut.trim().split("\n");
               if (topLines.length >= 2) {
-                const user = topLines[1].trim().split(/\s+/)[0];
-                if (user) ownerMap.set(name, user);
+                const user = topLines[1].trim().split(/\s+/)[1] || topLines[1].trim().split(/\s+/)[0];
+                if (user) {
+                  // Resolve numeric UIDs
+                  const numericUid = parseInt(user);
+                  if (!isNaN(numericUid)) {
+                    ownerMap.set(name, await resolveUid(numericUid));
+                  } else {
+                    ownerMap.set(name, user);
+                  }
+                }
               }
             } catch {
               // skip — owner stays "?"
@@ -132,10 +162,38 @@ export class DockerCollector implements IDockerCollector {
 
       const results: ContainerFullInfo[] = [];
       for (let i = 0; i < lines.length; i++) {
-        const [fullId, name] = lines[i].split("|", 2);
+        const parts = lines[i].split("|");
+        const fullId = parts[0];
+        const name = parts[1];
+        const status = parts[2] || "";
+        const composeProject = parts[3] || "";
+        const image = parts[4] || "";
+        const portsRaw = parts.slice(5).join("|") || ""; // ports may contain pipes
         const pid = pids[i] || 0;
         const ownerName = ownerMap.get(name) || "?";
-        results.push({ id: fullId.substring(0, 12), name, mainPid: pid, ownerUid: -1, ownerName });
+
+        // Parse health from status string (e.g. "Up 2 hours (healthy)")
+        let health: ContainerFullInfo["health"] = "none";
+        if (status.includes("(healthy)")) health = "healthy";
+        else if (status.includes("(unhealthy)")) health = "unhealthy";
+        else if (status.includes("(health: starting)") || status.includes("health: starting")) health = "starting";
+
+        // Parse uptime from status (e.g. "Up 2 hours", "Up 3 days")
+        const uptimeMatch = status.match(/Up\s+(.+?)(?:\s+\(|$)/);
+        const uptime = uptimeMatch ? uptimeMatch[1].trim() : "";
+
+        results.push({
+          id: fullId.substring(0, 12),
+          name,
+          mainPid: pid,
+          ownerUid: -1,
+          ownerName,
+          health,
+          composeProject,
+          uptime,
+          image,
+          ports: portsRaw,
+        });
       }
       return results;
     } catch (e) {
@@ -154,7 +212,7 @@ export class DockerCollector implements IDockerCollector {
     const map = new Map<string, ContainerStats>();
     try {
       const { stdout } = await execCommand(
-        `${this.docker} stats --no-stream --no-trunc --format "{{.ID}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}"`,
+        `${this.docker} stats --no-stream --no-trunc --format "{{.ID}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}"`,
         { timeout: 20000, retries: 1 },
       );
       const numCores = os.cpus().length || 1;
@@ -170,6 +228,8 @@ export class DockerCollector implements IDockerCollector {
           memUsedMib: memParts.length >= 1 ? toMib(memParts[0]) : 0,
           memLimitMib: memParts.length >= 2 ? toMib(memParts[1]) : 0,
           memPercent: memPct,
+          netIO: (parts[4] || "").trim(),
+          blockIO: (parts[5] || "").trim(),
         });
       }
     } catch (e) {
@@ -191,5 +251,25 @@ export class DockerCollector implements IDockerCollector {
 
   async restartContainer(containerId: string): Promise<void> {
     await execCommand(`${this.docker} restart ${containerId}`, { timeout: 30000 });
+  }
+
+  /** On-demand inspect — only called when user explicitly requests env/volumes */
+  async inspectContainer(containerId: string): Promise<ContainerInspect> {
+    try {
+      const { stdout } = await execCommand(
+        `${this.docker} inspect --format '{{json .Config.Env}}|||{{json .Mounts}}' ${containerId}`,
+        { timeout: 5000 },
+      );
+      const [envJson, mountsJson] = stdout.split("|||");
+      const env: string[] = JSON.parse(envJson || "[]");
+      const rawMounts: Array<{ Source: string; Destination: string; Mode: string }> = JSON.parse(mountsJson || "[]");
+      return {
+        env,
+        mounts: rawMounts.map((m) => ({ source: m.Source, destination: m.Destination, mode: m.Mode || "rw" })),
+      };
+    } catch (e) {
+      log(`[inspect] inspectContainer failed: ${e}`);
+      return { env: [], mounts: [] };
+    }
   }
 }

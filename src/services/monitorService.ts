@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { SystemInfo, GpuData, ContainerFullInfo, MonitorData } from "../types";
+import { SystemInfo, GpuData, ContainerFullInfo, ContainerInspect, MonitorData } from "../types";
 import { ISystemCollector, IGpuCollector, IDockerCollector } from "../collectors/interfaces";
 import { fmtMem } from "../utils/format";
 import { log } from "../utils/logger";
@@ -14,6 +14,10 @@ export class MonitorService implements vscode.Disposable {
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
   private gpuEnabled: boolean;
   private alertFired = new Set<number>(); // GPU indices that already fired alert
+  private idleAlertFired = new Set<number>(); // GPU indices that fired idle alert
+  private prevContainerIds = new Set<string>(); // for death detection
+  private prevContainerNames = new Map<string, string>(); // id → name
+  private leakAlertFired = new Set<number>(); // GPU indices that fired leak alert
   private gpuHistory: Array<{ timestamp: number; gpus: Array<{ index: number; memUsed: number; memTotal: number; util: number; temp: number }> }> = [];
 
   constructor(
@@ -110,8 +114,11 @@ export class MonitorService implements vscode.Disposable {
       if (this.gpuHistory.length > 60) this.gpuHistory.shift();
     }
 
-    // VRAM alerts
+    // Alerts (pure logic on existing data — no extra commands)
     this.checkVramAlerts();
+    this.checkIdleGpus();
+    this.checkContainerDeaths();
+    this.checkVramLeaks();
 
     this._onDataUpdated.fire(this.getLatestData());
   }
@@ -168,6 +175,106 @@ export class MonitorService implements vscode.Disposable {
       } else if (pct <= 85) {
         // Reset alert when usage drops back
         this.alertFired.delete(gpu.index);
+      }
+    }
+  }
+
+  /** Detect containers that disappeared since last refresh */
+  private checkContainerDeaths(): void {
+    const currentIds = new Set(this.containers.map((c) => c.id));
+    // Build current name map
+    const currentNames = new Map<string, string>();
+    for (const c of this.containers) currentNames.set(c.id, c.name);
+
+    if (this.prevContainerIds.size > 0) {
+      for (const prevId of this.prevContainerIds) {
+        if (!currentIds.has(prevId)) {
+          const name = this.prevContainerNames.get(prevId) || prevId;
+          vscode.window.showWarningMessage(
+            `Container stopped: ${name}`,
+            "Open Monitor",
+          ).then((action) => {
+            if (action === "Open Monitor") {
+              vscode.commands.executeCommand("gpuMonitor.show");
+            }
+          });
+        }
+      }
+    }
+    this.prevContainerIds = currentIds;
+    this.prevContainerNames = currentNames;
+  }
+
+  /** On-demand inspect — only called when user explicitly requests */
+  async inspectContainer(containerId: string): Promise<ContainerInspect> {
+    return this.dockerCollector.inspectContainer(containerId);
+  }
+
+  /** Detect GPUs with VRAM allocated but 0% utilization */
+  private checkIdleGpus(): void {
+    for (const gpu of this.gpuData.gpus) {
+      const pct = gpu.memTotal > 0 ? (gpu.memUsed / gpu.memTotal) * 100 : 0;
+      const hasVram = pct > 10; // at least 10% VRAM used
+      const isIdle = gpu.util <= 2; // ~0% utilization
+
+      if (hasVram && isIdle && !this.idleAlertFired.has(gpu.index)) {
+        // Confirm idle by checking last 3 history points
+        const recentHistory = this.gpuHistory.slice(-3);
+        const consistentlyIdle = recentHistory.length >= 3 && recentHistory.every((h) => {
+          const g = h.gpus.find((g) => g.index === gpu.index);
+          return g ? g.util <= 2 : false;
+        });
+        if (consistentlyIdle) {
+          this.idleAlertFired.add(gpu.index);
+          // Find which containers are using this GPU
+          const users = this.gpuData.processes
+            .filter((p) => p.gpuIndex === gpu.index && p.containerName)
+            .map((p) => p.containerName);
+          const uniqueUsers = [...new Set(users)].slice(0, 3).join(", ");
+          vscode.window.showInformationMessage(
+            `GPU ${gpu.index} idle (${fmtMem(gpu.memUsed)} VRAM allocated, 0% util)${uniqueUsers ? ` — ${uniqueUsers}` : ""}`,
+          );
+        }
+      } else if (!isIdle || !hasVram) {
+        this.idleAlertFired.delete(gpu.index);
+      }
+    }
+  }
+
+  /** Detect monotonically increasing VRAM — possible memory leak */
+  private checkVramLeaks(): void {
+    if (this.gpuHistory.length < 10) return; // need enough samples
+    const recent = this.gpuHistory.slice(-10);
+
+    for (const gpu of this.gpuData.gpus) {
+      if (this.leakAlertFired.has(gpu.index)) continue;
+      const pct = gpu.memTotal > 0 ? (gpu.memUsed / gpu.memTotal) * 100 : 0;
+      if (pct < 50) continue; // only care if already above 50%
+
+      const vals = recent
+        .map((h) => h.gpus.find((g) => g.index === gpu.index)?.memUsed)
+        .filter((v): v is number => v !== undefined);
+      if (vals.length < 10) continue;
+
+      // Check monotonic increase: each sample >= previous
+      let monotonic = true;
+      for (let i = 1; i < vals.length; i++) {
+        if (vals[i] < vals[i - 1]) { monotonic = false; break; }
+      }
+      // Must have meaningful growth (at least 5% increase over the window)
+      const growth = vals[vals.length - 1] - vals[0];
+      const growthPct = gpu.memTotal > 0 ? (growth / gpu.memTotal) * 100 : 0;
+
+      if (monotonic && growthPct >= 5) {
+        this.leakAlertFired.add(gpu.index);
+        vscode.window.showWarningMessage(
+          `GPU ${gpu.index}: VRAM growing steadily (+${fmtMem(growth)} in last ${recent.length} samples, now ${Math.round(pct)}%) — possible memory leak`,
+          "Open Monitor",
+        ).then((action) => {
+          if (action === "Open Monitor") {
+            vscode.commands.executeCommand("gpuMonitor.show");
+          }
+        });
       }
     }
   }

@@ -96,44 +96,72 @@ function getProcessDetailFromProc(
 
 // ── docker-based resolution (fallback for container environments) ──
 
+interface DockerPidDetail {
+  container: { id: string; name: string };
+  user: string;
+  uid: number;
+  rssMib: number;
+  cmdline: string;
+}
+
 interface DockerPidMap {
-  pidToContainer: Map<number, { id: string; name: string }>;
-  pidToUser: Map<number, string>;
+  pidToDetail: Map<number, DockerPidDetail>;
 }
 
 async function buildDockerPidMap(
   docker: string,
   cnameMap: Map<string, string>,
 ): Promise<DockerPidMap> {
-  const pidToContainer = new Map<number, { id: string; name: string }>();
-  const pidToUser = new Map<number, string>();
+  const pidToDetail = new Map<number, DockerPidDetail>();
 
   try {
     // Get all container IDs
     const { stdout } = await execCommand(`${docker} ps --no-trunc --format "{{.ID}}|{{.Names}}"`);
     const lines = stdout.trim().split("\n").filter((l) => l.includes("|"));
 
-    // For each container, get its PIDs and users via docker top
+    // For each container, get rich per-PID detail via docker top
     const promises = lines.map(async (line) => {
       const [fullId, name] = line.split("|", 2);
       const cid = fullId.substring(0, 12);
       try {
         const { stdout: topOut } = await execCommand(
-          `${docker} top ${cid} aux`,
+          `${docker} top ${cid} -eo pid,user,uid,rss,args`,
           { timeout: 5000 },
         );
         const topLines = topOut.trim().split("\n");
-        // Skip header (first line)
+        if (topLines.length < 2) return;
+
+        // Parse column positions from header (args can contain spaces)
+        const header = topLines[0];
+        const pidCol = header.indexOf("PID");
+        const userCol = header.indexOf("USER");
+        const uidCol = header.indexOf("UID");
+        const rssCol = header.indexOf("RSS");
+        const argsCol = header.indexOf("ARGS") >= 0 ? header.indexOf("ARGS") : header.indexOf("COMMAND");
+        if (argsCol < 0) return;
+
         for (let i = 1; i < topLines.length; i++) {
-          const parts = topLines[i].trim().split(/\s+/);
-          if (parts.length >= 2) {
-            const user = parts[0];
-            const pid = parseInt(parts[1]);
-            if (!isNaN(pid)) {
-              pidToContainer.set(pid, { id: cid, name: cnameMap.get(cid) || name });
-              pidToUser.set(pid, user);
-            }
-          }
+          const row = topLines[i];
+          if (!row.trim()) continue;
+
+          // Extract fields by column positions
+          const fields = row.trim().split(/\s+/);
+          const pid = parseInt(fields[0]);
+          if (isNaN(pid)) continue;
+
+          const user = fields[1] || "?";
+          const uid = parseInt(fields[2]) || -1;
+          const rssKb = parseInt(fields[3]) || 0;
+          // args is everything from argsCol onward (may contain spaces)
+          const cmdline = argsCol < row.length ? row.substring(argsCol).trim() : fields.slice(4).join(" ");
+
+          pidToDetail.set(pid, {
+            container: { id: cid, name: cnameMap.get(cid) || name },
+            user,
+            uid,
+            rssMib: Math.round(rssKb / 1024),
+            cmdline,
+          });
         }
       } catch {
         // container may have stopped
@@ -145,7 +173,7 @@ async function buildDockerPidMap(
     log(`[pidmap] buildDockerPidMap failed: ${e}`);
   }
 
-  return { pidToContainer, pidToUser };
+  return { pidToDetail };
 }
 
 // ── NvidiaCollector ────────────────────────────────────────────
@@ -247,25 +275,33 @@ export class NvidiaCollector implements IGpuCollector {
         });
         processes.push(...(await Promise.all(detailPromises)));
       } else {
-        // Fallback: use docker top to build PID→container map
+        // Fallback: use docker top to build PID→container map with rich detail
         const docker = (await findBinary("docker")) || "docker";
         const pidMap = await buildDockerPidMap(docker, containerNameMap);
 
         for (const r of rawProcs) {
-          const container = pidMap.pidToContainer.get(r.pid) || { id: "", name: "host" };
-          const username = pidMap.pidToUser.get(r.pid) || "?";
+          const detail = pidMap.pidToDetail.get(r.pid);
+          const container = detail?.container || { id: "", name: "host" };
+          const username = detail?.user || "?";
+          // Use cmdline from docker top when nvidia-smi returns [Not Found]
+          const nvidiaName = r.pname;
+          const isNotFound = !nvidiaName || nvidiaName === "[Not Found]";
+          const realCmdline = detail?.cmdline || (isNotFound ? "" : nvidiaName);
+          const processName = isNotFound
+            ? (realCmdline.split(/\s+/)[0]?.split("/").pop() || "unknown")
+            : (nvidiaName.split("/").pop() || nvidiaName);
           processes.push({
             pid: r.pid,
             gpuIndex: r.gpuIdx,
             memMib: r.mem,
-            processName: r.pname.split("/").pop() || r.pname,
+            processName,
             containerId: container.id,
             containerName: container.name,
-            cmdline: r.pname,
+            cmdline: realCmdline || processName,
             cwd: "?",
             cpuPercent: 0,
-            ramMib: 0,
-            uid: -1,
+            ramMib: detail?.rssMib || 0,
+            uid: detail?.uid ?? -1,
             username,
           });
         }

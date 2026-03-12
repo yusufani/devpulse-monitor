@@ -3,10 +3,11 @@ import { fmtMem } from "../../utils/format";
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-function bar(used: number, total: number): string {
+function bar(used: number, total: number, id?: string): string {
   const pct = total > 0 ? (used / total) * 100 : 0;
   const cls = pct > 90 ? "red" : pct > 70 ? "yellow" : "green";
-  return `<div class="bar"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>`;
+  const idAttr = id ? ` data-bar="${id}"` : "";
+  return `<div class="bar"${idAttr}><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>`;
 }
 
 function memClass(mib: number): string {
@@ -17,15 +18,15 @@ function renderGpuCards(gpus: GpuInfo[]): string {
   let html = "";
   for (const gpu of gpus) {
     const pct = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * 100) : 0;
-    html += `<div class="gpu-card">
+    html += `<div class="gpu-card" data-gpu="${gpu.index}">
       <div class="gpu-header">GPU ${gpu.index}: ${esc(gpu.name)}</div>
       <div class="gpu-stats">
-        <div class="gpu-stat"><span class="label">VRAM</span>${bar(gpu.memUsed, gpu.memTotal)}<span class="value">${fmtMem(gpu.memUsed)} / ${fmtMem(gpu.memTotal)} (${pct}%)</span></div>
-        <div class="gpu-stat"><span class="label">Util</span>${bar(gpu.util, 100)}<span class="value ${gpu.util > 80 ? "red" : gpu.util > 50 ? "yellow" : "green"}">${gpu.util}%</span></div>
+        <div class="gpu-stat"><span class="label">VRAM</span>${bar(gpu.memUsed, gpu.memTotal, `vram-${gpu.index}`)}<span class="value" data-val="vram-${gpu.index}">${fmtMem(gpu.memUsed)} / ${fmtMem(gpu.memTotal)} (${pct}%)</span></div>
+        <div class="gpu-stat"><span class="label">Util</span>${bar(gpu.util, 100, `util-${gpu.index}`)}<span class="value ${gpu.util > 80 ? "red" : gpu.util > 50 ? "yellow" : "green"}" data-val="util-${gpu.index}">${gpu.util}%</span></div>
         <div class="gpu-inline">
-          <span>Temp: <b class="${gpu.temp > 80 ? "red" : gpu.temp > 65 ? "yellow" : ""}">${gpu.temp}\u00B0C</b></span>
-          <span>Power: <b>${gpu.power.toFixed(0)}W</b></span>
-          <span>Free: <b>${fmtMem(gpu.memFree)}</b></span>
+          <span>Temp: <b class="${gpu.temp > 80 ? "red" : gpu.temp > 65 ? "yellow" : ""}" data-val="temp-${gpu.index}">${gpu.temp}\u00B0C</b></span>
+          <span>Power: <b data-val="power-${gpu.index}">${gpu.power.toFixed(0)}W</b></span>
+          <span>Free: <b data-val="free-${gpu.index}">${fmtMem(gpu.memFree)}</b></span>
         </div>
       </div>
     </div>`;
@@ -56,15 +57,15 @@ function renderGpuHistoryCharts(history: Array<{ timestamp: number; gpus: Array<
     const utilPath = points.map((p, i) => `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(1)},${(h2 - (p.util / 100) * h2).toFixed(1)}`).join(" ");
     const tempPath = points.map((p, i) => `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(1)},${(h2 - Math.min(p.temp, 100) / 100 * h2).toFixed(1)}`).join(" ");
 
-    html += `<div class="chart-card">
+    html += `<div class="chart-card" data-chart-gpu="${idx}">
       <div class="chart-label">GPU ${idx}</div>
       <svg width="${w}" height="${h2}" class="chart-svg">
         <line x1="0" y1="${h2 * 0.1}" x2="${w}" y2="${h2 * 0.1}" stroke="#333" stroke-dasharray="2"/>
         <line x1="0" y1="${h2 * 0.5}" x2="${w}" y2="${h2 * 0.5}" stroke="#333" stroke-dasharray="2"/>
         <line x1="0" y1="${h2 * 0.9}" x2="${w}" y2="${h2 * 0.9}" stroke="#333" stroke-dasharray="2"/>
-        <path d="${vramPath}" fill="none" stroke="#4ec9b0" stroke-width="2"/>
-        <path d="${utilPath}" fill="none" stroke="#dcdcaa" stroke-width="1.5" stroke-dasharray="4"/>
-        <path d="${tempPath}" fill="none" stroke="#f44747" stroke-width="1" stroke-dasharray="2"/>
+        <path d="${vramPath}" fill="none" stroke="#4ec9b0" stroke-width="2" class="chart-path" data-chart-path="vram-${idx}"/>
+        <path d="${utilPath}" fill="none" stroke="#dcdcaa" stroke-width="1.5" stroke-dasharray="4" class="chart-path" data-chart-path="util-${idx}"/>
+        <path d="${tempPath}" fill="none" stroke="#f44747" stroke-width="1" stroke-dasharray="2" class="chart-path" data-chart-path="temp-${idx}"/>
       </svg>
       <div class="chart-legend"><span class="green">\u2500 VRAM%</span><span class="yellow">--- Util%</span><span class="red">\u00B7\u00B7 Temp</span></div>
     </div>`;
@@ -81,10 +82,10 @@ function renderMultiGpuSummary(gpus: GpuInfo[]): string {
   const avgUtil = Math.round(gpus.reduce((s, g) => s + g.util, 0) / gpus.length);
   const maxTemp = Math.max(...gpus.map((g) => g.temp));
 
-  return `<div class="summary-bar">
-    <span>Total VRAM: <b class="${totalPct > 90 ? "red" : totalPct > 70 ? "yellow" : "green"}">${fmtMem(totalUsed)}/${fmtMem(totalMem)} (${totalPct}%)</b></span>
-    <span>Avg Util: <b>${avgUtil}%</b></span>
-    <span>Max Temp: <b class="${maxTemp > 80 ? "red" : maxTemp > 65 ? "yellow" : ""}">${maxTemp}\u00B0C</b></span>
+  return `<div class="summary-bar" id="summaryBar">
+    <span>Total VRAM: <b class="${totalPct > 90 ? "red" : totalPct > 70 ? "yellow" : "green"}" data-val="total-vram">${fmtMem(totalUsed)}/${fmtMem(totalMem)} (${totalPct}%)</b></span>
+    <span>Avg Util: <b data-val="avg-util">${avgUtil}%</b></span>
+    <span>Max Temp: <b class="${maxTemp > 80 ? "red" : maxTemp > 65 ? "yellow" : ""}" data-val="max-temp">${maxTemp}\u00B0C</b></span>
     <span>${gpus.length} GPUs</span>
   </div>`;
 }
@@ -123,7 +124,10 @@ function renderContainerSummary(data: GpuData): string {
     // Action buttons
     let actions = "";
     if (cn !== "(host)" && cid) {
-      actions = `<button class="btn btn-sm" onclick="restartContainer('${cid}','${esc(cn)}')" title="Restart">\u21BB</button>`;
+      actions = `<button class="btn btn-sm" onclick="execContainer('${cid}','${esc(cn)}')" title="Exec">\u25B6</button>`;
+      actions += `<button class="btn btn-sm" onclick="showLogs('${cid}','${esc(cn)}')" title="Logs">\u2261</button>`;
+      actions += `<button class="btn btn-sm" onclick="attachContainer('${cid}','${esc(cn)}')" title="Attach">\u2192</button>`;
+      actions += `<button class="btn btn-sm" onclick="restartContainer('${cid}','${esc(cn)}')" title="Restart">\u21BB</button>`;
       actions += `<button class="btn btn-sm btn-warn" onclick="stopContainer('${cid}','${esc(cn)}')" title="Stop">\u25A0</button>`;
       actions += `<button class="btn btn-sm btn-danger" onclick="killContainerAction('${cid}','${esc(cn)}')" title="Kill">\u00D7</button>`;
     }
@@ -181,6 +185,25 @@ export interface GpuHistoryPoint {
   gpus: Array<{ index: number; memUsed: number; memTotal: number; util: number; temp: number }>;
 }
 
+/** Build JSON-serializable data for incremental updates */
+export function buildGpuMonitorData(data: GpuData, refreshIntervalSec = 5, history: GpuHistoryPoint[] = []): Record<string, unknown> {
+  const { gpus, processes, containerStats, error } = data;
+
+  // Serialize containerStats map
+  const statsObj: Record<string, { cpuPercent: number; memUsedMib: number; memLimitMib: number; memPercent: number }> = {};
+  containerStats.forEach((v, k) => { statsObj[k] = v; });
+
+  return {
+    gpus,
+    processes,
+    containerStats: statsObj,
+    error,
+    refreshIntervalSec,
+    history,
+    timestamp: new Date().toLocaleTimeString(),
+  };
+}
+
 export function getGpuMonitorHtml(data: GpuData, refreshIntervalSec = 5, history: GpuHistoryPoint[] = []): string {
   const { gpus, processes, error } = data;
   const gpuRows = renderGpuCards(gpus);
@@ -190,10 +213,13 @@ export function getGpuMonitorHtml(data: GpuData, refreshIntervalSec = 5, history
 
   let processHtml = "";
   if (hasProcesses) {
-    processHtml = `<div class="section-title">Container Summary</div>${renderContainerSummary(data)}<div class="section-title">GPU Processes <input type="text" id="procFilter" class="filter-input" placeholder="Filter by name, user, container..." oninput="filterProcs()"></div>${renderProcessGroups(data)}`;
+    processHtml = `<div class="section-title">Container Summary</div><div id="containerSummary">${renderContainerSummary(data)}</div><div class="section-title">GPU Processes <input type="text" id="procFilter" class="filter-input" placeholder="Filter by name, user, container..." oninput="filterProcs()"></div><div id="processGroups">${renderProcessGroups(data)}</div>`;
   } else if (!error) {
     processHtml = `<div class="no-data">No GPU processes.</div>`;
   }
+
+  // Build initial JSON data for incremental updates
+  const initialData = JSON.stringify(buildGpuMonitorData(data, refreshIntervalSec, history));
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 :root{--bg:var(--vscode-editor-background);--fg:var(--vscode-editor-foreground);--border:var(--vscode-panel-border,#333);--green:#4ec9b0;--yellow:#dcdcaa;--red:#f44747;--cyan:#9cdcfe;--dim:var(--vscode-disabledForeground,#666);--card-bg:var(--vscode-sideBar-background,#1e1e1e)}
@@ -213,20 +239,21 @@ body{font-family:var(--vscode-editor-font-family,monospace);font-size:13px;color
 .gpu-stats{display:flex;flex-direction:column;gap:4px}
 .gpu-stat{display:flex;align-items:center;gap:8px}
 .gpu-stat .label{width:40px;color:var(--dim)}
-.gpu-stat .value{min-width:140px}
+.gpu-stat .value{min-width:140px;transition:color .3s}
 .gpu-inline{display:flex;gap:20px;margin-top:4px;color:var(--dim)}
-.gpu-inline b{color:var(--fg)}
+.gpu-inline b{color:var(--fg);transition:color .3s}
 .bar{width:160px;height:14px;background:#333;border-radius:3px;overflow:hidden;flex-shrink:0}
-.bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.bar-fill{height:100%;border-radius:3px;transition:width .5s ease,background-color .3s}
 .bar-fill.green{background:var(--green)}.bar-fill.yellow{background:var(--yellow)}.bar-fill.red{background:var(--red)}
 .chart-card{background:var(--card-bg);border:1px solid var(--border);border-radius:6px;padding:8px 14px;margin-bottom:8px;display:inline-block;margin-right:8px}
 .chart-label{font-weight:bold;margin-bottom:4px;font-size:12px}
 .chart-svg{display:block}
+.chart-path{transition:d .5s ease}
 .chart-legend{display:flex;gap:12px;margin-top:4px;font-size:11px}
 .filter-input{background:var(--card-bg);border:1px solid var(--border);color:var(--fg);padding:3px 8px;border-radius:3px;font-size:12px;font-family:inherit;width:200px}
 .filter-input:focus{outline:1px solid var(--cyan);border-color:var(--cyan)}
 table{border-collapse:collapse;width:100%;margin-bottom:8px}
-th,td{text-align:right;padding:3px 10px;border-bottom:1px solid var(--border);font-size:12px}
+th,td{text-align:right;padding:3px 10px;border-bottom:1px solid var(--border);font-size:12px;transition:color .3s,background .3s}
 th{color:var(--dim);font-weight:normal;text-transform:uppercase;font-size:11px}
 td.name{text-align:left;font-weight:bold;color:var(--cyan)}
 td.actions{text-align:right;white-space:nowrap}
@@ -251,26 +278,31 @@ td.actions{text-align:right;white-space:nowrap}
 .btn-danger{border-color:var(--red);color:var(--red)}.btn-danger:hover{background:var(--red);color:#fff}
 .btn-kill{background:none;border:none;color:var(--red);cursor:pointer;font-size:16px;padding:0 4px;opacity:.5}.btn-kill:hover{opacity:1}
 .hidden{display:none!important}
+@keyframes valPulse{0%{text-shadow:0 0 4px var(--cyan)}100%{text-shadow:none}}
+.val-changed{animation:valPulse .6s ease}
 </style></head><body>
 <div class="header">
   <h2>GPU / Docker VRAM Monitor</h2>
   <div>
-    <span class="meta">${new Date().toLocaleTimeString()} \u00B7 ${processes.length} procs \u00B7 auto-refresh ${refreshIntervalSec}s</span>
+    <span class="meta" id="metaInfo">${new Date().toLocaleTimeString()} \u00B7 ${processes.length} procs \u00B7 auto-refresh ${refreshIntervalSec}s</span>
     <button class="refresh-btn" onclick="vscode.postMessage({command:'refresh'})">\u21BB Refresh</button>
   </div>
 </div>
-${error ? `<div class="error">${esc(error)}</div>` : ""}
-${multiGpuSummary}
+${error ? `<div class="error" id="errorBox">${esc(error)}</div>` : `<div class="error hidden" id="errorBox"></div>`}
+<div id="multiGpuSummary">${multiGpuSummary}</div>
 <div class="section-title">GPU Overview</div>
-${gpuRows}
-${historyCharts}
-${processHtml}
+<div id="gpuCards">${gpuRows}</div>
+<div id="historyCharts">${historyCharts}</div>
+<div id="processSection">${processHtml}</div>
 <script>
 const vscode=acquireVsCodeApi();
 function killProc(p,n,m){vscode.postMessage({command:'killProcess',pid:p,name:n,mem:m})}
 function stopContainer(c,n){vscode.postMessage({command:'stopContainer',containerId:c,name:n})}
 function killContainerAction(c,n){vscode.postMessage({command:'killContainer',containerId:c,name:n})}
 function restartContainer(c,n){vscode.postMessage({command:'restartContainer',containerId:c,name:n})}
+function execContainer(c,n){vscode.postMessage({command:'exec',containerId:c,name:n})}
+function showLogs(c,n){vscode.postMessage({command:'logs',containerId:c,name:n})}
+function attachContainer(c,n){vscode.postMessage({command:'attach',containerId:c,name:n})}
 function filterProcs(){
   const q=(document.getElementById('procFilter')||{}).value||'';
   const ql=q.toLowerCase();
@@ -283,6 +315,109 @@ function filterProcs(){
     el.classList.toggle('hidden',!match);
   });
 }
+
+// Incremental update: update bar fills and values in-place
+function updateBarFill(barEl, pct, cls) {
+  var fill = barEl.querySelector('.bar-fill');
+  if (fill) {
+    fill.style.width = pct + '%';
+    fill.className = 'bar-fill ' + cls;
+  }
+}
+
+function setValText(el, text) {
+  if (el && el.textContent !== text) {
+    el.textContent = text;
+    el.classList.remove('val-changed');
+    void el.offsetWidth; // force reflow
+    el.classList.add('val-changed');
+  }
+}
+
+// Listen for incremental data updates
+window.addEventListener('message', function(event) {
+  var msg = event.data;
+  if (msg.type !== 'update') return;
+
+  // For now, do a full re-render via innerHTML since the GPU monitor HTML is complex
+  // But update bar fills in-place for smooth transitions where possible
+  var gpus = msg.gpus || [];
+
+  // Update bar fills for existing GPU cards
+  for (var i = 0; i < gpus.length; i++) {
+    var g = gpus[i];
+    var vramPct = g.memTotal > 0 ? (g.memUsed / g.memTotal) * 100 : 0;
+    var vramCls = vramPct > 90 ? 'red' : vramPct > 70 ? 'yellow' : 'green';
+    var utilCls = g.util > 90 ? 'red' : g.util > 70 ? 'yellow' : 'green';
+
+    var vramBar = document.querySelector('[data-bar="vram-' + g.index + '"]');
+    var utilBar = document.querySelector('[data-bar="util-' + g.index + '"]');
+    if (vramBar) updateBarFill(vramBar, vramPct, vramCls);
+    if (utilBar) updateBarFill(utilBar, g.util, utilCls);
+
+    // Update value text
+    var fmtM = function(mib) { return mib >= 1024 ? (mib/1024).toFixed(1)+'G' : mib >= 10 ? mib.toFixed(1)+'M' : mib > 0 ? mib.toFixed(2)+'M' : '0M'; };
+    var vramVal = document.querySelector('[data-val="vram-' + g.index + '"]');
+    var utilVal = document.querySelector('[data-val="util-' + g.index + '"]');
+    var tempVal = document.querySelector('[data-val="temp-' + g.index + '"]');
+    var powerVal = document.querySelector('[data-val="power-' + g.index + '"]');
+    var freeVal = document.querySelector('[data-val="free-' + g.index + '"]');
+
+    setValText(vramVal, fmtM(g.memUsed) + ' / ' + fmtM(g.memTotal) + ' (' + Math.round(vramPct) + '%)');
+    setValText(utilVal, g.util + '%');
+    if (tempVal) setValText(tempVal, g.temp + '\\u00B0C');
+    if (powerVal) setValText(powerVal, g.power.toFixed(0) + 'W');
+    if (freeVal) setValText(freeVal, fmtM(g.memFree));
+  }
+
+  // Update meta info
+  var meta = document.getElementById('metaInfo');
+  if (meta) meta.textContent = msg.timestamp + ' \\u00B7 ' + (msg.processes||[]).length + ' procs \\u00B7 auto-refresh ' + msg.refreshIntervalSec + 's';
+
+  // Update chart paths (smooth SVG transitions)
+  var history = msg.history || [];
+  if (history.length >= 2) {
+    var gpuIndicesSet = {};
+    for (var hi = 0; hi < history.length; hi++) {
+      for (var gi = 0; gi < history[hi].gpus.length; gi++) {
+        gpuIndicesSet[history[hi].gpus[gi].index] = true;
+      }
+    }
+    for (var idx in gpuIndicesSet) {
+      var points = [];
+      for (var hi2 = 0; hi2 < history.length; hi2++) {
+        var gp = null;
+        for (var gi2 = 0; gi2 < history[hi2].gpus.length; gi2++) {
+          if (history[hi2].gpus[gi2].index == idx) { gp = history[hi2].gpus[gi2]; break; }
+        }
+        if (gp) {
+          points.push({
+            vramPct: gp.memTotal > 0 ? (gp.memUsed / gp.memTotal) * 100 : 0,
+            util: gp.util,
+            temp: gp.temp
+          });
+        }
+      }
+      if (points.length < 2) continue;
+      var w = 300, h2 = 60;
+      var stepX = w / (points.length - 1);
+      var makePath = function(getter) {
+        return points.map(function(p, i) {
+          return (i === 0 ? 'M' : 'L') + (i * stepX).toFixed(1) + ',' + (h2 - getter(p) / 100 * h2).toFixed(1);
+        }).join(' ');
+      };
+      var vp = document.querySelector('[data-chart-path="vram-' + idx + '"]');
+      var up = document.querySelector('[data-chart-path="util-' + idx + '"]');
+      var tp = document.querySelector('[data-chart-path="temp-' + idx + '"]');
+      if (vp) vp.setAttribute('d', makePath(function(p){return p.vramPct}));
+      if (up) up.setAttribute('d', makePath(function(p){return p.util}));
+      if (tp) tp.setAttribute('d', makePath(function(p){return Math.min(p.temp,100)}));
+    }
+  }
+});
+
+// Store initial data
+var _lastData = ${initialData};
 </script>
 </body></html>`;
 }

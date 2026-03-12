@@ -36,6 +36,13 @@ export interface ContainerStats {
   memUsedMib: number;
   memLimitMib: number;
   memPercent: number;
+  netIO: string;
+  blockIO: string;
+}
+
+export interface ContainerInspect {
+  env: string[];
+  mounts: Array<{ source: string; destination: string; mode: string }>;
 }
 
 export interface ContainerFullInfo {
@@ -44,6 +51,11 @@ export interface ContainerFullInfo {
   mainPid: number;
   ownerUid: number;
   ownerName: string;
+  health: "healthy" | "unhealthy" | "starting" | "none";
+  composeProject: string;
+  uptime: string;
+  image: string;
+  ports: string;
 }
 
 export interface GpuData {
