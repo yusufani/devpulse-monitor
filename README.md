@@ -40,8 +40,8 @@ code --install-extension devpulse-*.vsix
 
 ### From Source
 ```bash
-git clone https://github.com/yusufani/vscode-docker-monitor.git
-cd vscode-docker-monitor
+git clone https://github.com/yusufani/devpulse-monitor.git
+cd devpulse-monitor
 npm install
 npm run package
 code --install-extension dist/devpulse-*.vsix
@@ -63,6 +63,18 @@ code --install-extension dist/devpulse-*.vsix
 - **rocm-smi** — for AMD GPU monitoring (optional)
 
 None of these are strictly required. DevPulse shows whatever is available.
+
+## Support
+
+If you find DevPulse useful, consider [sponsoring the project](https://github.com/sponsors/yusufani) to help keep it maintained and improved.
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-red?logo=github)](https://github.com/sponsors/yusufani)
+
+## Links
+
+- [GitHub Repository](https://github.com/yusufani/devpulse-monitor)
+- [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ANISOFT.devpulse-monitor)
+- [Report Issues](https://github.com/yusufani/devpulse-monitor/issues)
 
 ## License
 
