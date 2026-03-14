@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0](https://github.com/yusufani/vscode-docker-monitor/compare/v1.3.0...v1.4.0) (2026-03-14)
+
+
+### Features
+
+* Add configuration option to notify only for containers owned by the current user ([c9d8e93](https://github.com/yusufani/vscode-docker-monitor/commit/c9d8e93856a03395d3e7167f9004879c9800f2cc))
+* Enhance UID resolution for macOS and improve Docker process user retrieval ([5f80b48](https://github.com/yusufani/vscode-docker-monitor/commit/5f80b48629c9e9710ee4159e9386d13a15c490e9))
+
 ## [1.3.0](https://github.com/yusufani/vscode-docker-monitor/compare/v1.2.1...v1.3.0) (2026-03-12)
 
 
