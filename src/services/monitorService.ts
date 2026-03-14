@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as os from "os";
 import { SystemInfo, GpuData, ContainerFullInfo, ContainerInspect, MonitorData } from "../types";
 import { ISystemCollector, IGpuCollector, IDockerCollector } from "../collectors/interfaces";
 import { fmtMem } from "../utils/format";
@@ -17,6 +18,7 @@ export class MonitorService implements vscode.Disposable {
   private idleAlertFired = new Set<number>(); // GPU indices that fired idle alert
   private prevContainerIds = new Set<string>(); // for death detection
   private prevContainerNames = new Map<string, string>(); // id → name
+  private prevContainerOwners = new Map<string, string>(); // id → ownerName
   private leakAlertFired = new Set<number>(); // GPU indices that fired leak alert
   private gpuHistory: Array<{ timestamp: number; gpus: Array<{ index: number; memUsed: number; memTotal: number; util: number; temp: number }> }> = [];
 
@@ -182,13 +184,25 @@ export class MonitorService implements vscode.Disposable {
   /** Detect containers that disappeared since last refresh */
   private checkContainerDeaths(): void {
     const currentIds = new Set(this.containers.map((c) => c.id));
-    // Build current name map
+    // Build current name/owner maps
     const currentNames = new Map<string, string>();
-    for (const c of this.containers) currentNames.set(c.id, c.name);
+    const currentOwners = new Map<string, string>();
+    for (const c of this.containers) {
+      currentNames.set(c.id, c.name);
+      currentOwners.set(c.id, c.ownerName);
+    }
+
+    const onlyMine = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("notifyOnlyMyContainers", true);
+    const currentUser = os.userInfo().username;
 
     if (this.prevContainerIds.size > 0) {
       for (const prevId of this.prevContainerIds) {
         if (!currentIds.has(prevId)) {
+          // If filtering enabled, skip containers not owned by current user
+          if (onlyMine) {
+            const owner = this.prevContainerOwners.get(prevId) || "?";
+            if (owner !== currentUser && owner !== "?" && owner !== "root") continue;
+          }
           const name = this.prevContainerNames.get(prevId) || prevId;
           vscode.window.showWarningMessage(
             `Container stopped: ${name}`,
@@ -203,6 +217,7 @@ export class MonitorService implements vscode.Disposable {
     }
     this.prevContainerIds = currentIds;
     this.prevContainerNames = currentNames;
+    this.prevContainerOwners = currentOwners;
   }
 
   /** On-demand inspect — only called when user explicitly requests */

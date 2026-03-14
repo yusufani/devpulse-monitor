@@ -61,6 +61,11 @@
           "type": "string",
           "default": "",
           "description": "Custom path to docker binary (auto-detected if empty)"
+        },
+        "dockerMonitor.notifyOnlyMyContainers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Only show container stop notifications for containers owned by the current OS user"
         }
       }
     },
