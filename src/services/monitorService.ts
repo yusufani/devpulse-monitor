@@ -196,23 +196,30 @@ export class MonitorService implements vscode.Disposable {
     const currentUser = os.userInfo().username;
 
     if (this.prevContainerIds.size > 0) {
+      const stoppedNames: string[] = [];
       for (const prevId of this.prevContainerIds) {
         if (!currentIds.has(prevId)) {
-          // If filtering enabled, skip containers not owned by current user
           if (onlyMine) {
             const owner = this.prevContainerOwners.get(prevId) || "?";
             if (owner !== currentUser && owner !== "?" && owner !== "root") continue;
           }
-          const name = this.prevContainerNames.get(prevId) || prevId;
-          vscode.window.showWarningMessage(
-            `Container stopped: ${name}`,
-            "Open Monitor",
-          ).then((action) => {
-            if (action === "Open Monitor") {
-              vscode.commands.executeCommand("gpuMonitor.show");
-            }
-          });
+          stoppedNames.push(this.prevContainerNames.get(prevId) || prevId);
         }
+      }
+      if (stoppedNames.length === 1) {
+        vscode.window.showWarningMessage(
+          `Container stopped: ${stoppedNames[0]}`,
+          "Open Monitor",
+        ).then((action) => {
+          if (action === "Open Monitor") vscode.commands.executeCommand("gpuMonitor.show");
+        });
+      } else if (stoppedNames.length > 1) {
+        vscode.window.showWarningMessage(
+          `${stoppedNames.length} containers stopped: ${stoppedNames.join(", ")}`,
+          "Open Monitor",
+        ).then((action) => {
+          if (action === "Open Monitor") vscode.commands.executeCommand("gpuMonitor.show");
+        });
       }
     }
     this.prevContainerIds = currentIds;
