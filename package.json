@@ -8,7 +8,7 @@
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yusuf-ani/vscode-docker-monitor"
+    "url": "https://github.com/yusufani/devpulse-monitor"
   },
   "extensionKind": [
     "workspace"
@@ -66,6 +66,11 @@
           "type": "boolean",
           "default": true,
           "description": "Only show container stop notifications for containers owned by the current OS user"
+        },
+        "dockerMonitor.enableNotifications": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable automatic notifications (GPU VRAM alerts, container stop, idle GPU, memory leak warnings)"
         }
       }
     },

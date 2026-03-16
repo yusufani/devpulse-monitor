@@ -117,10 +117,25 @@ export class MonitorService implements vscode.Disposable {
     }
 
     // Alerts (pure logic on existing data — no extra commands)
-    this.checkVramAlerts();
-    this.checkIdleGpus();
-    this.checkContainerDeaths();
-    this.checkVramLeaks();
+    const notificationsEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("enableNotifications", false);
+    if (notificationsEnabled) {
+      this.checkVramAlerts();
+      this.checkIdleGpus();
+      this.checkContainerDeaths();
+      this.checkVramLeaks();
+    } else {
+      // Still track container state so notifications work immediately when enabled
+      const currentIds = new Set(this.containers.map((c) => c.id));
+      const currentNames = new Map<string, string>();
+      const currentOwners = new Map<string, string>();
+      for (const c of this.containers) {
+        currentNames.set(c.id, c.name);
+        currentOwners.set(c.id, c.ownerName);
+      }
+      this.prevContainerIds = currentIds;
+      this.prevContainerNames = currentNames;
+      this.prevContainerOwners = currentOwners;
+    }
 
     this._onDataUpdated.fire(this.getLatestData());
   }

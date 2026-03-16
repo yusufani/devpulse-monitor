@@ -50,6 +50,11 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
         terminal.show();
       } else if (msg.command === "attach") {
         vscode.commands.executeCommand("gpuMonitor.attachContainer", msg.containerId, msg.name);
+      } else if (msg.command === "toggleNotifications") {
+        const config = vscode.workspace.getConfiguration("dockerMonitor");
+        const current = config.get<boolean>("enableNotifications", false);
+        await config.update("enableNotifications", !current, vscode.ConfigurationTarget.Global);
+        webviewView.webview.postMessage({ type: "notificationsState", enabled: !current });
       }
     });
 
@@ -159,6 +164,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   private _buildHtml(rows: ContainerRow[], gpuIndices: number[]): string {
     const jsonData = JSON.stringify(rows);
     const gpuIndicesJson = JSON.stringify(gpuIndices);
+    const notificationsEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("enableNotifications", false);
 
     return `<!DOCTYPE html>
 <html>
@@ -337,7 +343,10 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
 <body>
   <div class="toolbar">
     <span id="countLabel"></span>
-    <button id="groupBtn" title="Group by owner">Group by Owner</button>
+    <div>
+      <button id="notifyBtn" class="${notificationsEnabled ? "active" : ""}" title="Enable automatic notifications (VRAM, container stop, idle GPU, memory leak)">\uD83D\uDD14 Alerts</button>
+      <button id="groupBtn" title="Group by owner">Group by Owner</button>
+    </div>
   </div>
   <table>
     <thead>
@@ -578,6 +587,12 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     render();
   });
 
+  // Notification toggle
+  const notifyBtn = document.getElementById('notifyBtn');
+  notifyBtn.addEventListener('click', () => {
+    vscode.postMessage({ command: 'toggleNotifications' });
+  });
+
   // Action button handler
   window.doCmd = function(cmd, containerId, name) {
     vscode.postMessage({ command: cmd, containerId: containerId, name: name });
@@ -590,6 +605,8 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
       rows = msg.rows;
       gpuIndices = msg.gpuIndices;
       render();
+    } else if (msg.type === 'notificationsState') {
+      notifyBtn.classList.toggle('active', msg.enabled);
     }
   });
 

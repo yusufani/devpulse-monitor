@@ -40,7 +40,7 @@ code --install-extension devpulse-*.vsix
 
 ### From Source
 ```bash
-git clone https://github.com/yusufani/vscode-docker-monitor.git
+git clone https://github.com/yusufani/devpulse-monitor.git
 cd vscode-docker-monitor
 npm install
 npm run package
@@ -55,6 +55,7 @@ code --install-extension dist/devpulse-*.vsix
 | `dockerMonitor.webviewRefreshInterval` | `5` | WebView refresh interval (seconds) |
 | `dockerMonitor.gpuMonitoring` | `true` | Enable GPU monitoring |
 | `dockerMonitor.dockerBinary` | `""` | Custom docker binary path (auto-detected if empty) |
+| `dockerMonitor.enableNotifications` | `false` | Enable automatic notifications (VRAM alerts, container stop, idle GPU, memory leak) |
 
 ## Requirements
 
