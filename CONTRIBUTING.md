@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in contributing to Docker Monitor!
+Thank you for your interest in contributing to DevPulse Monitor!
 
 ## Development Setup
 

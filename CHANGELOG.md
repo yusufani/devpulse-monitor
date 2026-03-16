@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.0](https://github.com/yusufani/devpulse-monitor/compare/v1.4.0...v1.5.0) (2026-03-14)
+
+
+### Features
+
+* Add configuration option to notify only for containers owned by the current user ([c9d8e93](https://github.com/yusufani/devpulse-monitor/commit/c9d8e93856a03395d3e7167f9004879c9800f2cc))
+* Improve container stop notifications to handle multiple stopped containers ([e0c212a](https://github.com/yusufani/devpulse-monitor/commit/e0c212ae1f88686054b753b050fc2d692756c2b0))
+
 ## [1.4.0](https://github.com/yusufani/vscode-docker-monitor/compare/v1.3.0...v1.4.0) (2026-03-14)
 
 
