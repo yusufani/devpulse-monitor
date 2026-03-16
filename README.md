@@ -17,12 +17,49 @@ Working on a shared GPU server? Running dozens of containers? DevPulse gives you
 
 ## Features
 
-- **Container Resources Table** — Sortable table of all running containers with VRAM, CPU, RAM. Click column headers to sort. Group by owner to see per-user resource usage.
-- **GPU Monitoring** — NVIDIA (nvidia-smi), AMD (rocm-smi), Apple Silicon. Per-GPU VRAM maps with user color coding.
-- **System Metrics** — CPU and RAM usage in the status bar and sidebar with visual bars.
-- **Process Management** — Kill GPU processes, stop/restart/force-kill containers, view logs — directly from the sidebar.
-- **WebView Dashboard** — Full GPU/process visualization panel (`Ctrl+Shift+P` → "Open GPU Monitor").
-- **Container-Aware** — Works both on the host and from inside Docker containers (automatic fallback via `docker top`).
+### Container Resources Table
+Sortable table of all running containers showing VRAM, CPU, RAM, Net I/O, and Disk I/O. Click column headers to sort by any metric. Use the **Group by Owner** button to see per-user resource totals — great for shared servers where you need to know who's using what.
+
+### GPU Monitoring
+Full support for **NVIDIA** (nvidia-smi), **AMD** (rocm-smi), and **Apple Silicon** (system_profiler). Each GPU shows:
+- VRAM usage with a color-coded visual map per user
+- Temperature, power draw, and utilization percentage
+- Per-user breakdown: expand any GPU to see which user/container is consuming VRAM
+- Multi-GPU summary line when multiple GPUs are present
+
+### System Metrics
+CPU and RAM usage displayed in the **status bar** and **sidebar** with visual bars. Always visible at a glance while you work.
+
+### Container Management
+Right-click any container in the sidebar for a full set of actions:
+- **Stop / Restart / Force Kill** — manage container lifecycle
+- **Exec** — open a shell inside the container
+- **Attach** — attach to the container's main process
+- **Logs** — tail the last 100 lines in a VS Code terminal
+- **Open Port** — open exposed ports directly in your browser
+- **Show Environment Variables** — view all env vars set in the container
+- **Show Volume Mounts** — inspect bind mounts and volumes
+- **Copy Container ID / Name / Image** — quick copy to clipboard
+
+### Smart Alerts (Opt-in)
+All notifications are **disabled by default**. Enable them with the **Alerts** toggle button in the container table toolbar. Once enabled, DevPulse watches for:
+- **VRAM Critical** — warns when any GPU exceeds 90% VRAM usage (resets at 85%)
+- **Container Stopped** — notifies when containers disappear between refresh cycles. Use `notifyOnlyMyContainers` to filter by your OS user.
+- **Idle GPU** — detects GPUs with VRAM allocated but near-zero utilization for 3+ consecutive samples — helps find forgotten jobs
+- **Memory Leak** — flags GPUs with monotonically increasing VRAM over 10 samples with 5%+ growth — early warning for leaky training runs
+
+### WebView Dashboard
+Full GPU/process visualization panel with detailed charts. Open it via `Ctrl+Shift+G` or Command Palette → "Open GPU Monitor".
+
+### Quick Commands
+| Shortcut | Command |
+|----------|---------|
+| `Ctrl+Shift+G` | Open GPU Monitor panel |
+| `Ctrl+Shift+D` | Find Container (quick pick) |
+| `Ctrl+Shift+T` | Show Top GPU Consumers |
+
+### Graceful Degradation
+No GPU? Shows system metrics and containers only. No Docker? Shows GPU and system metrics. Running inside a container? Automatically falls back to `docker top` for process detection. Everything works with whatever is available.
 
 ## Platform Support
 
@@ -51,8 +88,6 @@ code --install-extension devpulse-*.vsix
 ```bash
 git clone https://github.com/yusufani/devpulse-monitor.git
 cd devpulse-monitor
-git clone https://github.com/yusufani/devpulse-monitor.git
-cd vscode-docker-monitor
 npm install
 npm run package
 code --install-extension dist/devpulse-*.vsix
@@ -67,6 +102,7 @@ code --install-extension dist/devpulse-*.vsix
 | `dockerMonitor.gpuMonitoring` | `true` | Enable GPU monitoring |
 | `dockerMonitor.dockerBinary` | `""` | Custom docker binary path (auto-detected if empty) |
 | `dockerMonitor.enableNotifications` | `false` | Enable automatic notifications (VRAM alerts, container stop, idle GPU, memory leak) |
+| `dockerMonitor.notifyOnlyMyContainers` | `true` | Only show container stop notifications for containers owned by the current OS user |
 
 ## Requirements
 
