@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/yusufani/devpulse-monitor/compare/v1.5.0...v1.6.0) (2026-03-16)
+
+
+### Features
+
+* Add notification toggle and configuration for automatic alerts ([1d2d1a5](https://github.com/yusufani/devpulse-monitor/commit/1d2d1a5ee1c4f4c90c9456f3994e05767f6437f3))
+
 ## [1.5.0](https://github.com/yusufani/devpulse-monitor/compare/v1.4.0...v1.5.0) (2026-03-14)
 
 
