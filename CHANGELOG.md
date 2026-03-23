@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/yusufani/devpulse-monitor/compare/v1.6.0...v1.7.0) (2026-03-23)
+
+
+### Features
+
+* add search input and context menu for container actions ([43fcf90](https://github.com/yusufani/devpulse-monitor/commit/43fcf9022bc37e2a7ad53589e409a85445ffb333))
+
 ## [1.6.0](https://github.com/yusufani/devpulse-monitor/compare/v1.5.0...v1.6.0) (2026-03-16)
 
 
