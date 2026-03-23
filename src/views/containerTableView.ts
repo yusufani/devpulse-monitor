@@ -187,6 +187,24 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     font-size: 10px;
     opacity: 0.6;
     border-bottom: 1px solid var(--vscode-widget-border, #333);
+    gap: 6px;
+  }
+  .search-input {
+    background: var(--vscode-input-background, #1e1e1e);
+    border: 1px solid var(--vscode-input-border, #555);
+    color: var(--vscode-input-foreground, #ccc);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: inherit;
+    width: 140px;
+    outline: none;
+  }
+  .search-input:focus {
+    border-color: var(--vscode-focusBorder, #007fd4);
+  }
+  .search-input::placeholder {
+    color: var(--vscode-input-placeholderForeground, #888);
   }
   .toolbar button {
     background: none;
@@ -275,20 +293,35 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   }
   .group-header .toggle { opacity: 0.5; margin-right: 4px; font-size: 9px; }
   .group-summary { opacity: 0.6; font-weight: normal; font-size: 10px; }
-  /* action buttons */
-  .act-btn {
-    background: none;
-    border: 1px solid var(--vscode-widget-border, #555);
-    color: var(--vscode-foreground);
-    font-size: 10px;
-    padding: 0px 4px;
-    border-radius: 2px;
-    cursor: pointer;
-    opacity: 0.5;
-    margin-left: 2px;
+  /* context menu */
+  .ctx-menu {
+    position: fixed;
+    background: var(--vscode-menu-background, #252526);
+    border: 1px solid var(--vscode-menu-border, #454545);
+    border-radius: 4px;
+    padding: 4px 0;
+    min-width: 140px;
+    z-index: 1000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    font-size: 11px;
   }
-  .act-btn:hover { opacity: 1; }
-  td.actions { white-space: nowrap; }
+  .ctx-menu-item {
+    padding: 4px 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--vscode-menu-foreground, #ccc);
+  }
+  .ctx-menu-item:hover {
+    background: var(--vscode-menu-selectionBackground, #094771);
+    color: var(--vscode-menu-selectionForeground, #fff);
+  }
+  .ctx-menu-sep {
+    height: 1px;
+    background: var(--vscode-menu-separatorBackground, #454545);
+    margin: 4px 0;
+  }
   /* GPU util bar */
   .util-bar {
     display: inline-block;
@@ -343,7 +376,8 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
 <body>
   <div class="toolbar">
     <span id="countLabel"></span>
-    <div>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <input type="text" id="searchInput" class="search-input" placeholder="Search containers..." />
       <button id="notifyBtn" class="${notificationsEnabled ? "active" : ""}" title="Enable automatic notifications (VRAM, container stop, idle GPU, memory leak)">\uD83D\uDD14 Alerts</button>
       <button id="groupBtn" title="Group by owner">Group by Owner</button>
     </div>
@@ -360,7 +394,6 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
         <th data-col="ramMib">RAM <span class="arrow"></span></th>
         <th data-col="netIO">Net <span class="arrow"></span></th>
         <th data-col="blockIO">Disk <span class="arrow"></span></th>
-        <th data-col="actions"></th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
@@ -374,6 +407,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   let sortCol = 'vram';
   let sortAsc = false;
   let grouped = false;
+  let searchQuery = '';
   const collapsedGroups = new Set();
   let prevValues = new Map(); // track previous cell values for change detection
 
@@ -400,12 +434,6 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   function utilCls(v) { return v > 80 ? 'red' : v > 50 ? 'yellow' : ''; }
   function ramCls(r) { return r.ramLimitMib > 0 && (r.ramMib / r.ramLimitMib) * 100 > 80 ? 'red' : ''; }
   function vramCls(r) { return r.hasGpu ? 'cyan' : 'dim'; }
-
-  function actionsHtml(r) {
-    return '<button class="act-btn" onclick="doCmd(\\'exec\\',\\'' + esc(r.id) + '\\',\\'' + esc(r.name) + '\\')" title="Exec">\\u25B6</button>' +
-      '<button class="act-btn" onclick="doCmd(\\'logs\\',\\'' + esc(r.id) + '\\',\\'' + esc(r.name) + '\\')" title="Logs">\\u2261</button>' +
-      '<button class="act-btn" onclick="doCmd(\\'attach\\',\\'' + esc(r.id) + '\\',\\'' + esc(r.name) + '\\')" title="Attach">\\u2192</button>';
-  }
 
   function healthBadge(h) {
     if (h === 'healthy') return '<span class="health-ok" title="healthy">\\u2705</span>';
@@ -453,7 +481,6 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
       '<td class="' + ramCls(r) + '">' + ramLabel(r) + '</td>' +
       '<td class="io-cell dim">' + (r.netIO ? esc(r.netIO) : '\\u2014') + '</td>' +
       '<td class="io-cell dim">' + (r.blockIO ? esc(r.blockIO) : '\\u2014') + '</td>' +
-      '<td class="actions">' + actionsHtml(r) + '</td>' +
       '</tr>';
   }
 
@@ -475,7 +502,6 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     html += '<th data-col="ramMib">RAM <span class="arrow"></span></th>';
     html += '<th data-col="netIO">Net <span class="arrow"></span></th>';
     html += '<th data-col="blockIO">Disk <span class="arrow"></span></th>';
-    html += '<th data-col="actions"></th>';
     headerRow.innerHTML = html;
 
     // Re-attach sort handlers
@@ -490,10 +516,17 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     });
   }
 
+  function filterRows(arr) {
+    if (!searchQuery) return arr;
+    const q = searchQuery.toLowerCase();
+    return arr.filter(r => {
+      return (r.name + ' ' + r.owner + ' ' + r.image + ' ' + r.composeProject + ' ' + r.gpuIdx + ' ' + r.ports).toLowerCase().indexOf(q) >= 0;
+    });
+  }
+
   function render() {
     const tbody = document.getElementById('tbody');
     const countLabel = document.getElementById('countLabel');
-    countLabel.textContent = rows.length + ' container' + (rows.length !== 1 ? 's' : '');
 
     buildHeaders();
 
@@ -508,8 +541,10 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
       }
     });
 
-    const sorted = sortRows(rows);
-    const totalCols = 8 + (grouped ? 0 : 1) + (gpuIndices.length > 1 ? gpuIndices.length : 0) + 1;
+    const filtered = filterRows(rows);
+    countLabel.textContent = filtered.length + '/' + rows.length + ' container' + (rows.length !== 1 ? 's' : '');
+    const sorted = sortRows(filtered);
+    const totalCols = 8 + (grouped ? 0 : 1) + (gpuIndices.length > 1 ? gpuIndices.length : 0);
 
     if (!grouped) {
       let html = '';
@@ -579,6 +614,13 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     });
   });
 
+  // Search filter
+  const searchInput = document.getElementById('searchInput');
+  searchInput.addEventListener('input', () => {
+    searchQuery = searchInput.value.trim();
+    render();
+  });
+
   // Group toggle
   const groupBtn = document.getElementById('groupBtn');
   groupBtn.addEventListener('click', () => {
@@ -593,10 +635,50 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     vscode.postMessage({ command: 'toggleNotifications' });
   });
 
-  // Action button handler
-  window.doCmd = function(cmd, containerId, name) {
-    vscode.postMessage({ command: cmd, containerId: containerId, name: name });
-  };
+  // Context menu
+  let ctxMenu = null;
+  function showContextMenu(e, containerId, name) {
+    e.preventDefault();
+    hideContextMenu();
+    ctxMenu = document.createElement('div');
+    ctxMenu.className = 'ctx-menu';
+    ctxMenu.style.left = e.clientX + 'px';
+    ctxMenu.style.top = e.clientY + 'px';
+    const items = [
+      { icon: '\\u25B6', label: 'Exec', cmd: 'exec' },
+      { icon: '\\u2261', label: 'Logs', cmd: 'logs' },
+      { icon: '\\u2192', label: 'Attach', cmd: 'attach' },
+    ];
+    for (const item of items) {
+      const el = document.createElement('div');
+      el.className = 'ctx-menu-item';
+      el.innerHTML = '<span>' + item.icon + '</span><span>' + item.label + '</span>';
+      el.addEventListener('click', () => {
+        vscode.postMessage({ command: item.cmd, containerId: containerId, name: name });
+        hideContextMenu();
+      });
+      ctxMenu.appendChild(el);
+    }
+    document.body.appendChild(ctxMenu);
+    // Adjust if menu goes off-screen
+    const rect = ctxMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) ctxMenu.style.left = (window.innerWidth - rect.width - 4) + 'px';
+    if (rect.bottom > window.innerHeight) ctxMenu.style.top = (window.innerHeight - rect.height - 4) + 'px';
+  }
+  function hideContextMenu() {
+    if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; }
+  }
+  document.addEventListener('click', hideContextMenu);
+  document.addEventListener('contextmenu', function(e) {
+    const tr = e.target.closest('tr[data-id]');
+    if (tr) {
+      const id = tr.dataset.id;
+      const r = rows.find(r => r.id === id);
+      if (r) showContextMenu(e, r.id, r.name);
+    } else {
+      hideContextMenu();
+    }
+  });
 
   // Listen for incremental updates
   window.addEventListener('message', (event) => {
