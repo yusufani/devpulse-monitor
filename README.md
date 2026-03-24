@@ -19,6 +19,8 @@ Working on a shared GPU server? Running dozens of containers? DevPulse gives you
 <img width="1214" height="1362" alt="image" src="https://github.com/user-attachments/assets/96ec3218-b9de-4ba2-8a08-a61636fc1cc2" />
 <img width="724" height="50" alt="image" src="https://github.com/user-attachments/assets/0c374a6c-15d1-4d50-9db1-c6dab8366a73" />
 
+<img width="2497" height="1339" alt="image" src="https://github.com/user-attachments/assets/a420eec4-fe3f-4dd7-ad22-93f8082f6c66" />
+
 ### Container Resources Table
 Sortable table of all running containers showing VRAM, CPU, RAM, Net I/O, and Disk I/O. Click column headers to sort by any metric. Use the **Group by Owner** button to see per-user resource totals — great for shared servers where you need to know who's using what.
 
