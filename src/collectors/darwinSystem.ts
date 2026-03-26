@@ -1,6 +1,7 @@
 import { ISystemCollector } from "./interfaces";
 import { SystemInfo } from "../types";
 import { execCommand } from "../utils/exec";
+import { log } from "../utils/logger";
 
 export class DarwinSystemCollector implements ISystemCollector {
   private prevCpuUser = 0;
@@ -24,8 +25,8 @@ export class DarwinSystemCollector implements ISystemCollector {
         this.prevCpuSystem = sys;
         this.prevCpuIdle = idle;
       }
-    } catch {
-      // fallback: just report 0
+    } catch (e) {
+      log(`[darwin] CPU usage query failed: ${e}`);
     }
 
     let memUsedMib = 0,
@@ -49,8 +50,8 @@ export class DarwinSystemCollector implements ISystemCollector {
       const purgeable = val("Pages purgeable");
       const available = (free + inactive + speculative + purgeable) * ps;
       memUsedMib = Math.round((parseInt(memTotal.trim()) - available) / (1024 * 1024));
-    } catch {
-      // sysctl or vm_stat not available
+    } catch (e) {
+      log(`[darwin] memory query (sysctl/vm_stat) failed: ${e}`);
     }
 
     return { cpuPercent, memUsedMib, memTotalMib };

@@ -1,6 +1,7 @@
 import { readFile } from "fs/promises";
 import { ISystemCollector } from "./interfaces";
 import { SystemInfo } from "../types";
+import { log } from "../utils/logger";
 
 export class LinuxSystemCollector implements ISystemCollector {
   private prevCpuIdle = 0;
@@ -20,8 +21,8 @@ export class LinuxSystemCollector implements ISystemCollector {
       }
       this.prevCpuIdle = idle;
       this.prevCpuTotal = total;
-    } catch {
-      // /proc/stat not available
+    } catch (e) {
+      log(`[linux] /proc/stat CPU read failed: ${e}`);
     }
 
     let memUsedMib = 0,
@@ -34,8 +35,8 @@ export class LinuxSystemCollector implements ISystemCollector {
       };
       memTotalMib = Math.round(val("MemTotal") / 1024);
       memUsedMib = Math.round((val("MemTotal") - val("MemAvailable")) / 1024);
-    } catch {
-      // /proc/meminfo not available
+    } catch (e) {
+      log(`[linux] /proc/meminfo memory read failed: ${e}`);
     }
 
     return { cpuPercent, memUsedMib, memTotalMib };

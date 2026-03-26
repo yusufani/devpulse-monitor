@@ -57,8 +57,8 @@ export class AppleGpuCollector implements IGpuCollector {
 
         const powerMatch = ioregOut.match(/"gpu-power"\s*=\s*(\d+)/);
         if (powerMatch) gpus[0].power = parseInt(powerMatch[1]) / 1000; // mW to W
-      } catch {
-        // ioreg may not have GPU data on older Macs
+      } catch (e) {
+        log(`[apple] ioreg IOGPUDevice query failed: ${e}`);
       }
 
       // Try AGXAccelerator as alternative source
@@ -70,8 +70,8 @@ export class AppleGpuCollector implements IGpuCollector {
           );
           const utilMatch = agxOut.match(/"Device Utilization %"\s*=\s*(\d+)/);
           if (utilMatch) gpus[0].util = parseInt(utilMatch[1]);
-        } catch {
-          // not available
+        } catch (e) {
+          log(`[apple] AGXAccelerator query failed: ${e}`);
         }
       }
 
@@ -89,8 +89,8 @@ export class AppleGpuCollector implements IGpuCollector {
           gpus[0].memUsed = Math.min(usedMib, gpus[0].memTotal);
           gpus[0].memFree = gpus[0].memTotal - gpus[0].memUsed;
         }
-      } catch {
-        // vm_stat not available
+      } catch (e) {
+        log(`[apple] vm_stat memory query failed: ${e}`);
       }
 
       // Temperature via ioreg thermal sensors (best-effort, no sudo)
@@ -105,8 +105,8 @@ export class AppleGpuCollector implements IGpuCollector {
           // Value may be in centi-degrees or raw — normalize
           gpus[0].temp = raw > 1000 ? Math.round(raw / 100) : raw;
         }
-      } catch {
-        // thermal data not available
+      } catch (e) {
+        log(`[apple] thermal ioreg query failed: ${e}`);
       }
     }
 
@@ -165,8 +165,8 @@ export class AppleGpuCollector implements IGpuCollector {
           });
         }
       }
-    } catch {
-      // ioreg GPU client detection not available
+    } catch (e) {
+      log(`[apple] ioreg GPU client PID detection failed: ${e}`);
     }
 
     // Method 2: If ioreg didn't find PIDs, try finding Metal/GPU-heavy processes
@@ -206,8 +206,8 @@ export class AppleGpuCollector implements IGpuCollector {
             username: user,
           });
         }
-      } catch {
-        // fallback also failed
+      } catch (e) {
+        log(`[apple] Metal/GPU process grep fallback failed: ${e}`);
       }
     }
 

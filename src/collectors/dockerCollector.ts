@@ -40,8 +40,8 @@ async function resolveUid(uid: number): Promise<string> {
       _uidMap.set(uid, name);
       return name;
     }
-  } catch {
-    // id command failed
+  } catch (e) {
+    log(`[docker] id -un ${uid} failed: ${e}`);
   }
   return `uid:${uid}`;
 }
@@ -155,7 +155,8 @@ export class DockerCollector implements IDockerCollector {
               try {
                 const result = await execCommand(topCmd, { timeout: 5000 });
                 topOut = result.stdout;
-              } catch {
+              } catch (e) {
+                log(`[owner] docker top extended format failed for ${cid}, falling back: ${e}`);
                 // Fallback to default docker top format
                 const result = await execCommand(
                   `${this.docker} top ${cid}`,
@@ -182,8 +183,8 @@ export class DockerCollector implements IDockerCollector {
                   }
                 }
               }
-            } catch {
-              // skip — owner stays "?"
+            } catch (e) {
+              log(`[owner] owner resolution failed for container ${name} (${cid}): ${e}`);
             }
           });
           await Promise.all(topPromises);

@@ -55,6 +55,13 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
         const current = config.get<boolean>("enableNotifications", false);
         await config.update("enableNotifications", !current, vscode.ConfigurationTarget.Global);
         webviewView.webview.postMessage({ type: "notificationsState", enabled: !current });
+      } else if (msg.command === "inspect") {
+        try {
+          const inspect = await this.monitor.inspectContainer(msg.containerId);
+          webviewView.webview.postMessage({ type: "inspectResult", containerId: msg.containerId, data: inspect });
+        } catch {
+          webviewView.webview.postMessage({ type: "inspectResult", containerId: msg.containerId, data: { env: [], mounts: [] } });
+        }
       }
     });
 
@@ -371,6 +378,106 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     font-size: 10px;
     max-width: 90px;
   }
+  /* inspect dropdown panel */
+  .inspect-row td {
+    padding: 0;
+    border-bottom: 2px solid var(--vscode-focusBorder, #007fd4);
+    background: var(--vscode-sideBar-background, #1e1e1e);
+  }
+  .inspect-panel {
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .inspect-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10px;
+    font-weight: 600;
+    opacity: 0.7;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .inspect-header .inspect-name {
+    color: var(--vscode-focusBorder, #007fd4);
+    font-size: 11px;
+    opacity: 1;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .inspect-close {
+    background: none;
+    border: none;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    opacity: 0.5;
+    font-size: 12px;
+    padding: 0 2px;
+    line-height: 1;
+  }
+  .inspect-close:hover { opacity: 1; }
+  .inspect-search {
+    background: var(--vscode-input-background, #1e1e1e);
+    border: 1px solid var(--vscode-input-border, #555);
+    color: var(--vscode-input-foreground, #ccc);
+    font-size: 10px;
+    padding: 3px 7px;
+    border-radius: 3px;
+    font-family: inherit;
+    width: 100%;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .inspect-search:focus { border-color: var(--vscode-focusBorder, #007fd4); }
+  .inspect-search::placeholder { color: var(--vscode-input-placeholderForeground, #888); }
+  .inspect-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--vscode-widget-border, #444);
+    padding-bottom: 4px;
+  }
+  .inspect-tab {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--vscode-foreground);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    opacity: 0.6;
+    font-family: inherit;
+  }
+  .inspect-tab:hover { opacity: 1; }
+  .inspect-tab.active {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    color: var(--vscode-focusBorder, #007fd4);
+    opacity: 1;
+  }
+  .inspect-list {
+    max-height: 180px;
+    overflow-y: auto;
+    font-size: 10px;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  .inspect-list::-webkit-scrollbar { width: 4px; }
+  .inspect-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+  .inspect-item {
+    padding: 2px 4px;
+    border-radius: 2px;
+    line-height: 1.6;
+    word-break: break-all;
+    white-space: pre-wrap;
+  }
+  .inspect-item:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04)); }
+  .inspect-item .ikey { color: var(--vscode-variable-foreground, #9cdcfe); }
+  .inspect-item .ival { color: var(--vscode-foreground); opacity: 0.75; }
+  .inspect-item .ipath { color: #4ec9b0; }
+  .inspect-item .imode { opacity: 0.4; font-size: 9px; margin-left: 4px; }
+  .inspect-empty { opacity: 0.4; padding: 6px 4px; font-size: 10px; }
+  .inspect-loading { opacity: 0.5; padding: 6px 4px; font-size: 10px; }
+  .inspect-count { font-size: 9px; opacity: 0.4; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -410,6 +517,12 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   let searchQuery = '';
   const collapsedGroups = new Set();
   let prevValues = new Map(); // track previous cell values for change detection
+
+  // Inspect panel state
+  let openInspectId = null;
+  let inspectCache = new Map(); // containerId -> { env, mounts }
+  let inspectSearchQuery = '';
+  let inspectTab = 'env'; // 'env' | 'mounts'
 
   const fmtMem = (mib) => {
     if (mib <= 0) return '\\u2014';
@@ -485,6 +598,130 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   }
 
   function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+  function getTotalCols() {
+    return 8 + (grouped ? 0 : 1) + (gpuIndices.length > 1 ? gpuIndices.length : 0);
+  }
+
+  function inspectRowHtml(containerId, name) {
+    const data = inspectCache.get(containerId);
+    const colSpan = getTotalCols();
+    let content = '';
+    if (!data) {
+      content = '<div class="inspect-loading">\\u23F3 Inspect verisi y\\u00FCkleniyor...</div>';
+    } else {
+      const q = inspectSearchQuery.toLowerCase();
+      const envItems = data.env.filter(e => !q || e.toLowerCase().indexOf(q) >= 0);
+      const mountItems = data.mounts.filter(m => !q || (m.source + m.destination + m.mode).toLowerCase().indexOf(q) >= 0);
+
+      const envCount = envItems.length;
+      const mountCount = mountItems.length;
+
+      let listHtml = '';
+      if (inspectTab === 'env') {
+        if (envCount === 0) {
+          listHtml = '<div class="inspect-empty">' + (q ? 'Sonuç bulunamadı' : 'Env var yok') + '</div>';
+        } else {
+          for (const e of envItems) {
+            const eq = e.indexOf('=');
+            if (eq > 0) {
+              const k = esc(e.substring(0, eq));
+              const v = esc(e.substring(eq + 1));
+              listHtml += '<div class="inspect-item"><span class="ikey">' + k + '</span><span class="ival">=' + v + '</span></div>';
+            } else {
+              listHtml += '<div class="inspect-item"><span class="ikey">' + esc(e) + '</span></div>';
+            }
+          }
+        }
+      } else {
+        if (mountCount === 0) {
+          listHtml = '<div class="inspect-empty">' + (q ? 'Sonuç bulunamadı' : 'Mount yok') + '</div>';
+        } else {
+          for (const m of mountItems) {
+            listHtml += '<div class="inspect-item"><span class="ipath">' + esc(m.destination) + '</span> <span class="ival">\\u2190 ' + esc(m.source) + '</span><span class="imode">' + esc(m.mode) + '</span></div>';
+          }
+        }
+      }
+
+      content = \`
+        <div class="inspect-tabs">
+          <button class="inspect-tab \${inspectTab === 'env' ? 'active' : ''}" data-tab="env">ENV <span class="inspect-count">\${data.env.length}</span></button>
+          <button class="inspect-tab \${inspectTab === 'mounts' ? 'active' : ''}" data-tab="mounts">Mounts <span class="inspect-count">\${data.mounts.length}</span></button>
+        </div>
+        <div class="inspect-list">\${listHtml}</div>
+      \`;
+    }
+
+    return '<tr class="inspect-row" data-inspect-for="' + esc(containerId) + '">' +
+      '<td colspan="' + colSpan + '">' +
+      '<div class="inspect-panel">' +
+      '<div class="inspect-header"><span>Inspect <span class="inspect-name">' + esc(name) + '</span></span><button class="inspect-close" data-close-inspect="' + esc(containerId) + '">\\u2715</button></div>' +
+      '<input type="text" class="inspect-search" placeholder="Ara... (env key, value, path)" value="' + esc(inspectSearchQuery) + '">' +
+      content +
+      '</div></td></tr>';
+  }
+
+  function removeInspectRow() {
+    const existing = document.querySelector('.inspect-row');
+    if (existing) existing.remove();
+  }
+
+  function insertInspectRow(containerId, name) {
+    removeInspectRow();
+    const tr = document.querySelector('tr[data-id="' + containerId + '"]');
+    if (!tr) return;
+    const inspectTr = document.createElement('tbody');
+    inspectTr.innerHTML = inspectRowHtml(containerId, name);
+    const newTr = inspectTr.firstElementChild;
+    tr.after(newTr);
+
+    // Attach search handler
+    const searchEl = newTr.querySelector('.inspect-search');
+    if (searchEl) {
+      searchEl.focus();
+      searchEl.addEventListener('input', () => {
+        inspectSearchQuery = searchEl.value;
+        const r = rows.find(r => r.id === containerId);
+        insertInspectRow(containerId, r ? r.name : containerId);
+      });
+    }
+
+    // Attach tab handlers
+    newTr.querySelectorAll('.inspect-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        inspectTab = btn.dataset.tab;
+        const r = rows.find(r => r.id === containerId);
+        insertInspectRow(containerId, r ? r.name : containerId);
+      });
+    });
+
+    // Attach close handler
+    const closeBtn = newTr.querySelector('.inspect-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => {
+        openInspectId = null;
+        inspectSearchQuery = '';
+        removeInspectRow();
+      });
+    }
+  }
+
+  function openInspect(containerId, name) {
+    if (openInspectId === containerId) {
+      // Toggle off
+      openInspectId = null;
+      inspectSearchQuery = '';
+      removeInspectRow();
+      return;
+    }
+    openInspectId = containerId;
+    inspectSearchQuery = '';
+    inspectTab = 'env';
+    insertInspectRow(containerId, name);
+    if (!inspectCache.has(containerId)) {
+      vscode.postMessage({ command: 'inspect', containerId, name });
+    }
+  }
 
   function buildHeaders() {
     const headerRow = document.getElementById('headerRow');
@@ -601,7 +838,24 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
         });
       });
     }
+
+    // Re-insert inspect row after render if one was open
+    if (openInspectId) {
+      const r = rows.find(r => r.id === openInspectId);
+      if (r) insertInspectRow(openInspectId, r.name);
+      else { openInspectId = null; inspectSearchQuery = ''; }
+    }
   }
+
+  // Double-click to open inspect dropdown
+  document.getElementById('tbody').addEventListener('dblclick', (e) => {
+    const tr = e.target.closest('tr[data-id]');
+    if (tr) {
+      const id = tr.dataset.id;
+      const r = rows.find(r => r.id === id);
+      if (r) openInspect(r.id, r.name);
+    }
+  });
 
   // Sort click handlers (initial)
   document.querySelectorAll('th[data-col]').forEach(th => {
@@ -689,6 +943,12 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
       render();
     } else if (msg.type === 'notificationsState') {
       notifyBtn.classList.toggle('active', msg.enabled);
+    } else if (msg.type === 'inspectResult') {
+      inspectCache.set(msg.containerId, msg.data);
+      if (openInspectId === msg.containerId) {
+        const r = rows.find(r => r.id === msg.containerId);
+        insertInspectRow(msg.containerId, r ? r.name : msg.containerId);
+      }
     }
   });
 

@@ -48,8 +48,8 @@ async function resolveUidAsync(uid: number): Promise<string> {
       _uidMap.set(uid, name);
       return name;
     }
-  } catch {
-    // id command failed
+  } catch (e) {
+    log(`[nvidia] id -un ${uid} failed: ${e}`);
   }
   return cached;
 }
@@ -151,7 +151,8 @@ async function buildDockerPidMap(
         try {
           const result = await execCommand(topCmd, { timeout: 5000 });
           topOut = result.stdout;
-        } catch {
+        } catch (e) {
+          log(`[pidmap] docker top extended format failed for ${cid}, falling back: ${e}`);
           // Fallback to default docker top format
           const result = await execCommand(
             `${docker} top ${cid}`,
@@ -194,8 +195,8 @@ async function buildDockerPidMap(
             cmdline,
           });
         }
-      } catch {
-        // container may have stopped
+      } catch (e) {
+        log(`[pidmap] docker top failed for container ${cid}: ${e}`);
       }
     });
 
