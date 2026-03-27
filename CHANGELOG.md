@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.8.0](https://github.com/yusufani/devpulse-monitor/compare/v1.7.0...v1.8.0) (2026-03-27)
+
+
+### Features
+
+* add inspect functionality and UI for container details ([2662fb5](https://github.com/yusufani/devpulse-monitor/commit/2662fb50b41d22040f01f4f71127da4a3f64945b))
+* add VRAM alert threshold, idle GPU detection, and bulk container actions ([451838c](https://github.com/yusufani/devpulse-monitor/commit/451838c842dfe5448912f37b7b62e82c4e9f979a))
+
 ## [1.7.0](https://github.com/yusufani/devpulse-monitor/compare/v1.6.0...v1.7.0) (2026-03-23)
 
 
