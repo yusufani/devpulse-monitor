@@ -14,12 +14,20 @@ function memClass(mib: number): string {
   return mib > 40000 ? "red" : mib > 10000 ? "yellow" : "";
 }
 
+function vendorEmoji(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.includes("nvidia")) return "\uD83D\uDFE2";
+  if (lower.includes("amd") || lower.includes("radeon")) return "\uD83D\uDD34";
+  if (lower.includes("apple")) return "\uD83C\uDF4E";
+  return "\uD83C\uDFAE";
+}
+
 function renderGpuCards(gpus: GpuInfo[]): string {
   let html = "";
   for (const gpu of gpus) {
     const pct = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * 100) : 0;
     html += `<div class="gpu-card" data-gpu="${gpu.index}">
-      <div class="gpu-header">GPU ${gpu.index}: ${esc(gpu.name)}</div>
+      <div class="gpu-header">${vendorEmoji(gpu.name)} GPU ${gpu.index}: ${esc(gpu.name)}</div>
       <div class="gpu-stats">
         <div class="gpu-stat"><span class="label">VRAM</span>${bar(gpu.memUsed, gpu.memTotal, `vram-${gpu.index}`)}<span class="value" data-val="vram-${gpu.index}">${fmtMem(gpu.memUsed)} / ${fmtMem(gpu.memTotal)} (${pct}%)</span></div>
         <div class="gpu-stat"><span class="label">Util</span>${bar(gpu.util, 100, `util-${gpu.index}`)}<span class="value ${gpu.util > 80 ? "red" : gpu.util > 50 ? "yellow" : "green"}" data-val="util-${gpu.index}">${gpu.util}%</span></div>
@@ -40,7 +48,7 @@ function renderGpuHistoryCharts(history: Array<{ timestamp: number; gpus: Array<
   const gpuIndices = new Set<number>();
   for (const h of history) for (const g of h.gpus) gpuIndices.add(g.index);
 
-  let html = `<div class="section-title">GPU History (last ${history.length} samples)</div>`;
+  let html = `<div class="section-title">\uD83D\uDCC8 GPU History (last ${history.length} samples)<button class="btn export-btn" onclick="vscode.postMessage({command:'exportHistory'})" title="Export CSV">\uD83D\uDCBE Export CSV</button></div>`;
 
   for (const idx of [...gpuIndices].sort()) {
     const points = history.map((h) => {
@@ -139,7 +147,7 @@ function renderContainerSummary(data: GpuData): string {
 }
 
 function renderProcessGroups(data: GpuData): string {
-  const { processes } = data;
+  const { processes, containerStats } = data;
   const cnameToId: Record<string, string> = {};
   const groups: Record<string, GpuProcess[]> = {};
   for (const p of processes) {
@@ -159,13 +167,15 @@ function renderProcessGroups(data: GpuData): string {
     const tr = procs.reduce((s, p) => s + p.ramMib, 0);
     const gu = [...new Set(procs.map((p) => p.gpuIndex))].sort().join(",");
     const cid = cnameToId[cn] || "";
+    const cs = cid ? containerStats.get(cid) : undefined;
+    const cpuStr = cs ? ` \u00B7 CPU ${cs.cpuPercent.toFixed(1)}%` : "";
     let act = "";
     if (cn !== "(host)" && cid) {
       act = `<button class="btn btn-warn" onclick="restartContainer('${cid}','${esc(cn)}')">Restart</button>`;
       act += `<button class="btn btn-warn" onclick="stopContainer('${cid}','${esc(cn)}')">Stop</button>`;
       act += `<button class="btn btn-danger" onclick="killContainerAction('${cid}','${esc(cn)}')">Kill</button>`;
     }
-    html += `<div class="group-header"><span class="group-name">${esc(cn)}</span><span class="group-meta">${procs.length} procs \u00B7 VRAM ${fmtMem(tv)} \u00B7 RAM ${fmtMem(tr)} \u00B7 GPU ${gu}</span>${act}</div>`;
+    html += `<div class="group-header"><span class="group-name">${esc(cn)}</span><span class="group-meta">${procs.length} procs \u00B7 VRAM ${fmtMem(tv)} \u00B7 RAM ${fmtMem(tr)} \u00B7 GPU ${gu}${cpuStr}</span>${act}</div>`;
     for (let i = 0; i < procs.length; i++) {
       const p = procs[i];
       const last = i === procs.length - 1;
@@ -213,7 +223,7 @@ export function getGpuMonitorHtml(data: GpuData, refreshIntervalSec = 5, history
 
   let processHtml = "";
   if (hasProcesses) {
-    processHtml = `<div class="section-title">Container Summary</div><div id="containerSummary">${renderContainerSummary(data)}</div><div class="section-title">GPU Processes <input type="text" id="procFilter" class="filter-input" placeholder="Filter by name, user, container..." oninput="filterProcs()"></div><div id="processGroups">${renderProcessGroups(data)}</div>`;
+    processHtml = `<div class="section-title">\uD83D\uDC33 Container Summary</div><div id="containerSummary">${renderContainerSummary(data)}</div><div class="section-title">\u2699\uFE0F GPU Processes <input type="text" id="procFilter" class="filter-input" placeholder="Filter by name, user, container..." oninput="filterProcs()"></div><div id="processGroups">${renderProcessGroups(data)}</div>`;
   } else if (!error) {
     processHtml = `<div class="no-data">No GPU processes.</div>`;
   }
@@ -290,7 +300,7 @@ td.actions{text-align:right;white-space:nowrap}
 </div>
 ${error ? `<div class="error" id="errorBox">${esc(error)}</div>` : `<div class="error hidden" id="errorBox"></div>`}
 <div id="multiGpuSummary">${multiGpuSummary}</div>
-<div class="section-title">GPU Overview</div>
+<div class="section-title">\uD83C\uDFAE GPU Overview</div>
 <div id="gpuCards">${gpuRows}</div>
 <div id="historyCharts">${historyCharts}</div>
 <div id="processSection">${processHtml}</div>

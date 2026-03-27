@@ -71,6 +71,23 @@
           "type": "boolean",
           "default": false,
           "description": "Enable automatic notifications (GPU VRAM alerts, container stop, idle GPU, memory leak warnings)"
+        },
+        "dockerMonitor.vramAlertThreshold": {
+          "type": "number",
+          "default": 90,
+          "minimum": 50,
+          "maximum": 99,
+          "description": "VRAM usage % that triggers a critical alert (default: 90)"
+        },
+        "dockerMonitor.idleGpuDetection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable idle GPU detection alerts (VRAM allocated but 0% utilization)"
+        },
+        "dockerMonitor.leakDetection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable VRAM memory leak detection (monotonic growth alerts)"
         }
       }
     },
@@ -181,6 +198,10 @@
         "command": "gpuMonitor.showVolumes",
         "title": "Show Volume Mounts",
         "icon": "$(folder-library)"
+      },
+      {
+        "command": "gpuMonitor.exportHistory",
+        "title": "DevPulse: Export GPU History (CSV)"
       }
     ],
     "menus": {

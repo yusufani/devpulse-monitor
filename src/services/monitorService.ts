@@ -120,9 +120,11 @@ export class MonitorService implements vscode.Disposable {
     const notificationsEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("enableNotifications", false);
     if (notificationsEnabled) {
       this.checkVramAlerts();
-      this.checkIdleGpus();
       this.checkContainerDeaths();
-      this.checkVramLeaks();
+      const idleEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("idleGpuDetection", true);
+      const leakEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("leakDetection", true);
+      if (idleEnabled) this.checkIdleGpus();
+      if (leakEnabled) this.checkVramLeaks();
     } else {
       // Still track container state so notifications work immediately when enabled
       const currentIds = new Set(this.containers.map((c) => c.id));
@@ -177,9 +179,10 @@ export class MonitorService implements vscode.Disposable {
   }
 
   private checkVramAlerts(): void {
+    const threshold = vscode.workspace.getConfiguration("dockerMonitor").get<number>("vramAlertThreshold", 90);
     for (const gpu of this.gpuData.gpus) {
       const pct = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * 100) : 0;
-      if (pct > 90 && !this.alertFired.has(gpu.index)) {
+      if (pct > threshold && !this.alertFired.has(gpu.index)) {
         this.alertFired.add(gpu.index);
         vscode.window.showWarningMessage(
           `GPU ${gpu.index} VRAM ${pct}% (${fmtMem(gpu.memUsed)}/${fmtMem(gpu.memTotal)})`,
@@ -189,7 +192,7 @@ export class MonitorService implements vscode.Disposable {
             vscode.commands.executeCommand("gpuMonitor.show");
           }
         });
-      } else if (pct <= 85) {
+      } else if (pct <= Math.max(50, threshold - 5)) {
         // Reset alert when usage drops back
         this.alertFired.delete(gpu.index);
       }

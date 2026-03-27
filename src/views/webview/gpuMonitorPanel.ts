@@ -70,6 +70,8 @@ export class GpuMonitorPanel implements vscode.Disposable {
           vscode.commands.executeCommand("gpuMonitor.attachContainer", msg.containerId, msg.name);
         } else if (msg.command === "refresh") {
           this.refresh();
+        } else if (msg.command === 'exportHistory') {
+          vscode.commands.executeCommand('gpuMonitor.exportHistory');
         }
       } catch (e) {
         vscode.window.showErrorMessage(`${e}`);

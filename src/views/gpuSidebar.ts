@@ -15,6 +15,7 @@ import {
   ProcessDetailItem,
   GpuUserItem,
   OpenMonitorItem,
+  ErrorItem,
   tempColor,
   vramColor,
 } from "./treeItems";
@@ -29,6 +30,7 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
   private containers: ContainerFullInfo[] = [];
   private containerStats = new Map<string, ContainerStats>();
   private hasGpu = false;
+  private gpuError = "";
   private gpuHistory: Array<{ timestamp: number; gpus: Array<{ index: number; memUsed: number; memTotal: number; util: number; temp: number }> }> = [];
   private subscription: vscode.Disposable;
 
@@ -40,6 +42,7 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
       this.gpuProcesses = data.gpuData.processes;
       this.containerStats = data.gpuData.containerStats;
       this.hasGpu = data.gpuData.gpus.length > 0;
+      this.gpuError = data.gpuData.error || "";
       this.gpuHistory = monitor.getGpuHistory();
       this._onDidChangeTreeData.fire(undefined);
     });
@@ -61,6 +64,9 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
   private getRootItems(): SidebarItem[] {
     const items: SidebarItem[] = [];
     items.push(new SystemItem(this.system));
+    if (this.gpuError && this.gpus.length === 0) {
+      items.push(new ErrorItem("\u26A0 GPU error: " + this.gpuError));
+    }
     // Multi-GPU summary line
     if (this.gpus.length > 1) {
       const totalUsed = this.gpus.reduce((s, g) => s + g.memUsed, 0);

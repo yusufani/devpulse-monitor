@@ -62,6 +62,18 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
         } catch {
           webviewView.webview.postMessage({ type: "inspectResult", containerId: msg.containerId, data: { env: [], mounts: [] } });
         }
+      } else if (msg.command === "bulkStop") {
+        const ids: string[] = msg.containerIds || [];
+        for (const id of ids) {
+          try { await this.monitor.stopContainer(id); } catch { /* skip failed */ }
+        }
+        this.monitor.refresh();
+      } else if (msg.command === "bulkRestart") {
+        const ids: string[] = msg.containerIds || [];
+        for (const id of ids) {
+          try { await this.monitor.restartContainer(id); } catch { /* skip failed */ }
+        }
+        this.monitor.refresh();
       }
     });
 
@@ -378,6 +390,41 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     font-size: 10px;
     max-width: 90px;
   }
+  /* multi-select */
+  .sel-cell {
+    width: 20px;
+    padding: 2px 4px;
+    text-align: center;
+  }
+  input[type="checkbox"].row-check {
+    cursor: pointer;
+    accent-color: var(--vscode-focusBorder, #007fd4);
+    width: 12px;
+    height: 12px;
+  }
+  .bulk-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    background: var(--vscode-editor-selectionBackground, rgba(0,122,204,0.15));
+    border-bottom: 1px solid var(--vscode-focusBorder, #007fd4);
+    font-size: 10px;
+    flex-wrap: wrap;
+  }
+  .bulk-bar button {
+    background: none;
+    border: 1px solid var(--vscode-widget-border, #555);
+    color: var(--vscode-foreground);
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .bulk-bar button:hover { opacity: 0.8; }
+  .bulk-bar .bulk-stop { border-color: var(--vscode-editorWarning-foreground, #cc0); color: var(--vscode-editorWarning-foreground, #cc0); }
+  .bulk-bar .bulk-restart { border-color: #4ec9b0; color: #4ec9b0; }
+  .hidden { display: none !important; }
   /* inspect dropdown panel */
   .inspect-row td {
     padding: 0;
@@ -484,14 +531,21 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   <div class="toolbar">
     <span id="countLabel"></span>
     <div style="display:flex;align-items:center;gap:4px;">
-      <input type="text" id="searchInput" class="search-input" placeholder="Search containers..." />
+      <input type="text" id="searchInput" class="search-input" placeholder="\uD83D\uDD0D Search containers..." />
       <button id="notifyBtn" class="${notificationsEnabled ? "active" : ""}" title="Enable automatic notifications (VRAM, container stop, idle GPU, memory leak)">\uD83D\uDD14 Alerts</button>
-      <button id="groupBtn" title="Group by owner">Group by Owner</button>
+      <button id="groupBtn" title="Group by owner">\uD83D\uDC65 Group</button>
     </div>
+  </div>
+  <div id="bulkBar" class="bulk-bar hidden">
+    <span id="bulkCount"></span>
+    <button class="bulk-stop" id="bulkStopBtn">&#9632; Stop</button>
+    <button class="bulk-restart" id="bulkRestartBtn">&#8634; Restart</button>
+    <button id="clearSelBtn">&#10005; Clear</button>
   </div>
   <table>
     <thead>
       <tr id="headerRow">
+        <th class="sel-cell"><input type="checkbox" id="selectAllInit"></th>
         <th data-col="name">Container <span class="arrow"></span></th>
         <th data-col="owner" id="ownerTh">Owner <span class="arrow"></span></th>
         <th data-col="vram">VRAM <span class="arrow"></span></th>
@@ -517,6 +571,21 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   let searchQuery = '';
   const collapsedGroups = new Set();
   let prevValues = new Map(); // track previous cell values for change detection
+  let selectedIds = new Set();
+
+  function updateBulkBar() {
+    const count = selectedIds.size;
+    const bar = document.getElementById('bulkBar');
+    const cnt = document.getElementById('bulkCount');
+    if (bar) bar.classList.toggle('hidden', count === 0);
+    if (cnt) cnt.textContent = count + ' container' + (count !== 1 ? 's' : '') + ' selected';
+    const sa = document.getElementById('selectAll');
+    if (sa) {
+      const visibleRows = document.querySelectorAll('tr[data-id]');
+      sa.indeterminate = count > 0 && count < visibleRows.length;
+      sa.checked = count > 0 && count === visibleRows.length;
+    }
+  }
 
   // Inspect panel state
   let openInspectId = null;
@@ -584,6 +653,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     const imgShort = r.image ? r.image.replace(/^.*\\//, '').substring(0, 24) : '';
     const tooltip = esc(r.name) + (r.image ? '\\n' + esc(r.image) : '') + (r.ports ? '\\nPorts: ' + esc(r.ports) : '') + (r.composeProject ? '\\n[' + esc(r.composeProject) + ']' : '');
     return '<tr data-id="' + esc(r.id) + '">' +
+      '<td class="sel-cell"><input type="checkbox" class="row-check" data-id="' + esc(r.id) + '"' + (selectedIds.has(r.id) ? ' checked' : '') + '></td>' +
       '<td class="name" title="' + tooltip + '">' + nameLabel + composeHtml + uptimeHtml + (imgShort ? '<span class="image-tag">' + esc(imgShort) + '</span>' : '') + '</td>' +
       (showOwner ? '<td class="owner-cell">' + esc(r.owner) + '</td>' : '') +
       '<td class="' + vramCls(r) + '">' + (r.vram > 0 ? fmtMem(r.vram) : '\\u2014') + '</td>' +
@@ -600,7 +670,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
   function getTotalCols() {
-    return 8 + (grouped ? 0 : 1) + (gpuIndices.length > 1 ? gpuIndices.length : 0);
+    return 9 + (grouped ? 0 : 1) + (gpuIndices.length > 1 ? gpuIndices.length : 0);
   }
 
   function inspectRowHtml(containerId, name) {
@@ -725,7 +795,8 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
 
   function buildHeaders() {
     const headerRow = document.getElementById('headerRow');
-    let html = '<th data-col="name">Container <span class="arrow"></span></th>';
+    let html = '<th class="sel-cell"><input type="checkbox" id="selectAll"></th>';
+    html += '<th data-col="name">Container <span class="arrow"></span></th>';
     if (!grouped) html += '<th data-col="owner" id="ownerTh">Owner <span class="arrow"></span></th>';
     html += '<th data-col="vram">VRAM <span class="arrow"></span></th>';
     if (gpuIndices.length > 1) {
@@ -767,6 +838,19 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
 
     buildHeaders();
 
+    // Re-attach select-all handler
+    const sa = document.getElementById('selectAll');
+    if (sa) {
+      sa.addEventListener('change', () => {
+        selectedIds.clear();
+        if (sa.checked) {
+          document.querySelectorAll('tr[data-id]').forEach(tr => selectedIds.add(tr.dataset.id));
+        }
+        render();
+      });
+    }
+    updateBulkBar();
+
     // Update sort arrows
     document.querySelectorAll('th[data-col]').forEach(th => {
       const arrow = th.querySelector('.arrow');
@@ -781,7 +865,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     const filtered = filterRows(rows);
     countLabel.textContent = filtered.length + '/' + rows.length + ' container' + (rows.length !== 1 ? 's' : '');
     const sorted = sortRows(filtered);
-    const totalCols = 8 + (grouped ? 0 : 1) + (gpuIndices.length > 1 ? gpuIndices.length : 0);
+    const totalCols = getTotalCols();
 
     if (!grouped) {
       let html = '';
@@ -857,6 +941,16 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     }
   });
 
+  document.getElementById('tbody').addEventListener('change', (e) => {
+    const cb = e.target.closest('.row-check');
+    if (cb) {
+      if (cb.checked) selectedIds.add(cb.dataset.id);
+      else selectedIds.delete(cb.dataset.id);
+      updateBulkBar();
+      e.stopPropagation();
+    }
+  });
+
   // Sort click handlers (initial)
   document.querySelectorAll('th[data-col]').forEach(th => {
     if (th.dataset.col === 'actions') return;
@@ -887,6 +981,26 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   const notifyBtn = document.getElementById('notifyBtn');
   notifyBtn.addEventListener('click', () => {
     vscode.postMessage({ command: 'toggleNotifications' });
+  });
+
+  const bulkStopBtn = document.getElementById('bulkStopBtn');
+  const bulkRestartBtn = document.getElementById('bulkRestartBtn');
+  const clearSelBtn = document.getElementById('clearSelBtn');
+  if (bulkStopBtn) bulkStopBtn.addEventListener('click', () => {
+    if (!selectedIds.size) return;
+    vscode.postMessage({ command: 'bulkStop', containerIds: [...selectedIds] });
+    selectedIds.clear();
+    render();
+  });
+  if (bulkRestartBtn) bulkRestartBtn.addEventListener('click', () => {
+    if (!selectedIds.size) return;
+    vscode.postMessage({ command: 'bulkRestart', containerIds: [...selectedIds] });
+    selectedIds.clear();
+    render();
+  });
+  if (clearSelBtn) clearSelBtn.addEventListener('click', () => {
+    selectedIds.clear();
+    render();
   });
 
   // Context menu

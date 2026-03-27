@@ -360,6 +360,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.exportHistory", async () => {
+      const history = monitor.getGpuHistory();
+      if (history.length === 0) {
+        vscode.window.showInformationMessage("No GPU history to export yet.");
+        return;
+      }
+      const lines = ["timestamp,gpu_index,mem_used_mib,mem_total_mib,util_pct,temp_c"];
+      for (const point of history) {
+        const ts = new Date(point.timestamp).toISOString();
+        for (const g of point.gpus) {
+          lines.push(`${ts},${g.index},${g.memUsed},${g.memTotal},${g.util},${g.temp}`);
+        }
+      }
+      const csv = lines.join("\n");
+      const doc = await vscode.workspace.openTextDocument({ content: csv, language: "plaintext" });
+      await vscode.window.showTextDocument(doc);
+      vscode.window.showInformationMessage(`GPU history exported: ${history.length} samples, ${history[0]?.gpus.length || 0} GPU(s)`);
+    }),
+  );
+
   log("Extension activated.");
 }
 
