@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/yusufani/devpulse-monitor/compare/v1.8.0...v1.9.0) (2026-04-03)
+
+
+### Features
+
+* update refresh intervals and add debug logging functionality ([99cf0dd](https://github.com/yusufani/devpulse-monitor/commit/99cf0dd522b82d439f304f65a957cb0ca1a612a2))
+
 ## [1.8.0](https://github.com/yusufani/devpulse-monitor/compare/v1.7.0...v1.8.0) (2026-03-27)
 
 
