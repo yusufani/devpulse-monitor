@@ -3,7 +3,7 @@ import * as os from "os";
 import { SystemInfo, GpuData, ContainerFullInfo, ContainerInspect, MonitorData } from "../types";
 import { ISystemCollector, IGpuCollector, IDockerCollector } from "../collectors/interfaces";
 import { fmtMem } from "../utils/format";
-import { log } from "../utils/logger";
+import { log, logDebug } from "../utils/logger";
 
 export class MonitorService implements vscode.Disposable {
   private _onDataUpdated = new vscode.EventEmitter<MonitorData>();
@@ -12,7 +12,8 @@ export class MonitorService implements vscode.Disposable {
   private system: SystemInfo = { cpuPercent: 0, memUsedMib: 0, memTotalMib: 0 };
   private gpuData: GpuData = { gpus: [], processes: [], containerStats: new Map(), timestamp: 0, error: "" };
   private containers: ContainerFullInfo[] = [];
-  private refreshTimer: ReturnType<typeof setInterval> | undefined;
+  private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private refreshing = false;
   private gpuEnabled: boolean;
   private alertFired = new Set<number>(); // GPU indices that already fired alert
   private idleAlertFired = new Set<number>(); // GPU indices that fired idle alert
@@ -51,108 +52,123 @@ export class MonitorService implements vscode.Disposable {
   }
 
   async refresh(): Promise<void> {
+    if (this.refreshing) {
+      logDebug("Skipping refresh — previous cycle still running");
+      return;
+    }
+    this.refreshing = true;
     try {
-      // Collect system info and container list in parallel (fast)
-      const [system, containers] = await Promise.all([
-        this.systemCollector.collect(),
-        this.dockerCollector.getAllRunningContainers(),
-      ]);
-      this.system = system;
-      this.containers = containers;
+      try {
+        // Collect system info and container list in parallel (fast)
+        const [system, containers] = await Promise.all([
+          this.systemCollector.collect(),
+          this.dockerCollector.getAllRunningContainers(),
+        ]);
+        this.system = system;
+        this.containers = containers;
 
-      // GPU data — optional, graceful if missing
-      if (this.gpuEnabled) {
-        try {
-          const containerNameMap = await this.dockerCollector.getContainerNames();
-          const [gpus, processes, containerStats] = await Promise.all([
-            this.gpuCollector.collectGpus(),
-            this.gpuCollector.collectProcesses(containerNameMap),
-            this.dockerCollector.getContainerStats(),
-          ]);
+        // GPU data — optional, graceful if missing
+        if (this.gpuEnabled) {
+          try {
+            // getContainerNames returns cached data from getAllRunningContainers above — no extra docker ps call
+            const containerNameMap = await this.dockerCollector.getContainerNames();
+            const [gpus, processes, containerStats] = await Promise.all([
+              this.gpuCollector.collectGpus(),
+              this.gpuCollector.collectProcesses(containerNameMap),
+              this.dockerCollector.getContainerStats(),
+            ]);
 
-          if (gpus.length > 0) {
-            this.gpuData = {
-              gpus,
-              processes,
-              containerStats,
-              timestamp: Date.now(),
-              error: "",
-            };
-          } else {
+            if (gpus.length > 0) {
+              this.gpuData = {
+                gpus,
+                processes,
+                containerStats,
+                timestamp: Date.now(),
+                error: "",
+              };
+            } else {
+              this.gpuData = {
+                gpus: [],
+                processes: [],
+                containerStats,
+                timestamp: Date.now(),
+                error: "",
+              };
+            }
+          } catch (e) {
+            log(`GPU collection failed: ${e}`);
+            const containerStats = await this.dockerCollector.getContainerStats();
             this.gpuData = {
               gpus: [],
               processes: [],
               containerStats,
               timestamp: Date.now(),
-              error: "",
+              error: e instanceof Error ? e.message : String(e),
             };
           }
-        } catch (e) {
-          log(`GPU collection failed: ${e}`);
-          // Still get container stats for non-GPU view
+        } else {
           const containerStats = await this.dockerCollector.getContainerStats();
-          this.gpuData = {
-            gpus: [],
-            processes: [],
-            containerStats,
-            timestamp: Date.now(),
-            error: e instanceof Error ? e.message : String(e),
-          };
+          this.gpuData = { gpus: [], processes: [], containerStats, timestamp: Date.now(), error: "" };
         }
+      } catch (e) {
+        log(`Monitor refresh error: ${e}`);
+      }
+
+      // Record GPU history for charts (keep last 60 data points)
+      if (this.gpuData.gpus.length > 0) {
+        this.gpuHistory.push({
+          timestamp: Date.now(),
+          gpus: this.gpuData.gpus.map((g) => ({ index: g.index, memUsed: g.memUsed, memTotal: g.memTotal, util: g.util, temp: g.temp })),
+        });
+        if (this.gpuHistory.length > 60) this.gpuHistory.shift();
+      }
+
+      // Alerts (pure logic on existing data — no extra commands)
+      const notificationsEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("enableNotifications", false);
+      if (notificationsEnabled) {
+        this.checkVramAlerts();
+        this.checkContainerDeaths();
+        const idleEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("idleGpuDetection", true);
+        const leakEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("leakDetection", true);
+        if (idleEnabled) this.checkIdleGpus();
+        if (leakEnabled) this.checkVramLeaks();
       } else {
-        const containerStats = await this.dockerCollector.getContainerStats();
-        this.gpuData = { gpus: [], processes: [], containerStats, timestamp: Date.now(), error: "" };
+        // Still track container state so notifications work immediately when enabled
+        const currentIds = new Set(this.containers.map((c) => c.id));
+        const currentNames = new Map<string, string>();
+        const currentOwners = new Map<string, string>();
+        for (const c of this.containers) {
+          currentNames.set(c.id, c.name);
+          currentOwners.set(c.id, c.ownerName);
+        }
+        this.prevContainerIds = currentIds;
+        this.prevContainerNames = currentNames;
+        this.prevContainerOwners = currentOwners;
       }
-    } catch (e) {
-      log(`Monitor refresh error: ${e}`);
-    }
 
-    // Record GPU history for charts (keep last 60 data points)
-    if (this.gpuData.gpus.length > 0) {
-      this.gpuHistory.push({
-        timestamp: Date.now(),
-        gpus: this.gpuData.gpus.map((g) => ({ index: g.index, memUsed: g.memUsed, memTotal: g.memTotal, util: g.util, temp: g.temp })),
-      });
-      if (this.gpuHistory.length > 60) this.gpuHistory.shift();
+      this._onDataUpdated.fire(this.getLatestData());
+    } finally {
+      this.refreshing = false;
     }
-
-    // Alerts (pure logic on existing data — no extra commands)
-    const notificationsEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("enableNotifications", false);
-    if (notificationsEnabled) {
-      this.checkVramAlerts();
-      this.checkContainerDeaths();
-      const idleEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("idleGpuDetection", true);
-      const leakEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("leakDetection", true);
-      if (idleEnabled) this.checkIdleGpus();
-      if (leakEnabled) this.checkVramLeaks();
-    } else {
-      // Still track container state so notifications work immediately when enabled
-      const currentIds = new Set(this.containers.map((c) => c.id));
-      const currentNames = new Map<string, string>();
-      const currentOwners = new Map<string, string>();
-      for (const c of this.containers) {
-        currentNames.set(c.id, c.name);
-        currentOwners.set(c.id, c.ownerName);
-      }
-      this.prevContainerIds = currentIds;
-      this.prevContainerNames = currentNames;
-      this.prevContainerOwners = currentOwners;
-    }
-
-    this._onDataUpdated.fire(this.getLatestData());
   }
 
   startAutoRefresh(): void {
-    const intervalSec = vscode.workspace.getConfiguration("dockerMonitor").get<number>("refreshInterval", 10);
+    const intervalSec = vscode.workspace.getConfiguration("dockerMonitor").get<number>("refreshInterval", 30);
     this.stopAutoRefresh();
-    this.refresh(); // initial
-    this.refreshTimer = setInterval(() => this.refresh(), intervalSec * 1000);
+    const loop = () => {
+      this.refresh().finally(() => {
+        if (this.refreshTimer !== undefined) {
+          this.refreshTimer = setTimeout(loop, intervalSec * 1000);
+        }
+      });
+    };
+    this.refreshTimer = setTimeout(loop, 0); // start immediately
     log(`Auto-refresh started (${intervalSec}s interval)`);
   }
 
   stopAutoRefresh(): void {
-    if (this.refreshTimer) {
-      clearInterval(this.refreshTimer);
+    if (this.refreshTimer !== undefined) {
+      clearTimeout(this.refreshTimer);
       this.refreshTimer = undefined;
     }
   }

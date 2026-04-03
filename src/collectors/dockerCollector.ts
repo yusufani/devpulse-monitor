@@ -5,7 +5,7 @@ import { ContainerStats, ContainerFullInfo, ContainerInspect } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
 import { toMib } from "../utils/format";
 import { detectPlatform } from "../utils/platform";
-import { log } from "../utils/logger";
+import { log, logDebug } from "../utils/logger";
 
 function readProcFile(filePath: string): string {
   try {
@@ -15,7 +15,7 @@ function readProcFile(filePath: string): string {
   }
 }
 
-// UID resolution cache
+// UID resolution cache (persistent across refreshes)
 let _uidMap: Map<number, string> | null = null;
 
 async function resolveUid(uid: number): Promise<string> {
@@ -32,7 +32,6 @@ async function resolveUid(uid: number): Promise<string> {
     }
   }
   if (_uidMap.has(uid)) return _uidMap.get(uid)!;
-  // macOS fallback: /etc/passwd may not contain all users
   try {
     const { stdout } = await execCommand(`id -un ${uid}`, { timeout: 3000 });
     const name = stdout.trim();
@@ -41,17 +40,30 @@ async function resolveUid(uid: number): Promise<string> {
       return name;
     }
   } catch (e) {
-    log(`[docker] id -un ${uid} failed: ${e}`);
+    logDebug(`[docker] id -un ${uid} failed: ${e}`);
   }
   return `uid:${uid}`;
 }
 
 const STATS_CACHE_TTL = 25_000;
+const OWNER_CACHE_TTL = 120_000; // owner bilgisi 2 dakika cache'lenir
+const CONTAINER_LIST_CACHE_TTL = 8_000; // container listesi 8s cache (30s refresh'te yeterli)
 
 export class DockerCollector implements IDockerCollector {
   private dockerPath: string | null = null;
+
+  // Stats cache
   private cachedStats = new Map<string, ContainerStats>();
   private lastStatsTime = 0;
+
+  // Owner cache — container id → owner name
+  private ownerCache = new Map<string, string>();
+  private lastOwnerTime = 0;
+
+  // Container name cache — container id → name (from last docker ps)
+  private containerNameCache = new Map<string, string>();
+  private lastContainerListTime = 0;
+  private lastContainerList: ContainerFullInfo[] = [];
 
   async isAvailable(): Promise<boolean> {
     this.dockerPath = await findBinary("docker");
@@ -62,7 +74,16 @@ export class DockerCollector implements IDockerCollector {
     return this.dockerPath || "docker";
   }
 
+  /**
+   * Returns cached container name map. Cheap — no extra docker ps call.
+   * Data comes from the last getAllRunningContainers() call.
+   */
   async getContainerNames(): Promise<Map<string, string>> {
+    // If cache is fresh, return it directly
+    if (this.containerNameCache.size > 0 && Date.now() - this.lastContainerListTime < CONTAINER_LIST_CACHE_TTL) {
+      return new Map(this.containerNameCache);
+    }
+    // Otherwise do a lightweight docker ps (only ID|Name)
     const map = new Map<string, string>();
     try {
       const { stdout } = await execCommand(`${this.docker} ps --format "{{.ID}}|{{.Names}}" --no-trunc`);
@@ -74,7 +95,9 @@ export class DockerCollector implements IDockerCollector {
     } catch (e) {
       log(`[names] getContainerNames failed: ${e}`);
     }
-    return map;
+    this.containerNameCache = map;
+    this.lastContainerListTime = Date.now();
+    return new Map(map);
   }
 
   async getAllRunningContainers(): Promise<ContainerFullInfo[]> {
@@ -89,7 +112,19 @@ export class DockerCollector implements IDockerCollector {
         .trim()
         .split("\n")
         .filter((l) => l.includes("|"));
-      if (lines.length === 0) return [];
+      if (lines.length === 0) {
+        this.lastContainerList = [];
+        return [];
+      }
+
+      // Update container name cache from this docker ps result
+      const nameMap = new Map<string, string>();
+      for (const line of lines) {
+        const parts = line.split("|");
+        nameMap.set(parts[0].substring(0, 12), parts[1]);
+      }
+      this.containerNameCache = nameMap;
+      this.lastContainerListTime = Date.now();
 
       const ids = lines.map((l) => l.split("|", 1)[0]);
       const { stdout: pidOut } = await execCommand(`${this.docker} inspect --format '{{.State.Pid}}' ${ids.join(" ")}`);
@@ -98,98 +133,8 @@ export class DockerCollector implements IDockerCollector {
         .split("\n")
         .map((s) => parseInt(s.trim()) || 0);
 
-      // Resolve owners: try /proc first, fallback to docker top
-      const ownerMap = new Map<string, string>();
-      if (platform === "linux" || platform === "darwin") {
-        // Try /proc-based resolution (works when running on host)
-        let procWorks = false;
-        if (pids[0] > 0) {
-          const testStatus = readProcFile(`/proc/${pids[0]}/status`);
-          procWorks = testStatus.length > 0;
-        }
-
-        if (procWorks) {
-          for (let i = 0; i < lines.length; i++) {
-            const name = lines[i].split("|")[1];
-            const pid = pids[i] || 0;
-            if (pid > 0) {
-              const status = readProcFile(`/proc/${pid}/status`);
-              const uidMatch = status.match(/Uid:\s+(\d+)/);
-              if (uidMatch) {
-                ownerMap.set(name, await resolveUid(parseInt(uidMatch[1])));
-              }
-            }
-          }
-        } else {
-          // /proc not accessible (running inside container)
-          log("[owner] /proc not accessible, using docker inspect + docker top fallback");
-          const topPromises = lines.map(async (line) => {
-            const parts = line.split("|");
-            const id = parts[0], name = parts[1];
-            const cid = id.substring(0, 12);
-            try {
-              // First try docker inspect for configured user
-              const { stdout: inspectOut } = await execCommand(
-                `${this.docker} inspect --format '{{.Config.User}}' ${cid}`,
-                { timeout: 5000 },
-              );
-              const configUser = inspectOut.trim();
-              if (configUser && configUser !== "''" && configUser !== "''") {
-                // May be numeric UID like "1000" or "1000:1000" — resolve to name
-                const userPart = configUser.split(":")[0];
-                const numericUid = parseInt(userPart);
-                if (!isNaN(numericUid)) {
-                  ownerMap.set(name, await resolveUid(numericUid));
-                } else {
-                  ownerMap.set(name, userPart);
-                }
-                return;
-              }
-
-              // Fallback: docker top for main process user
-              // macOS Docker Desktop uses BSD ps (-o not -eo)
-              const topCmd = platform === "darwin"
-                ? `${this.docker} top ${cid} -o pid,user`
-                : `${this.docker} top ${cid} -eo pid,user`;
-              let topOut = "";
-              try {
-                const result = await execCommand(topCmd, { timeout: 5000 });
-                topOut = result.stdout;
-              } catch (e) {
-                log(`[owner] docker top extended format failed for ${cid}, falling back: ${e}`);
-                // Fallback to default docker top format
-                const result = await execCommand(
-                  `${this.docker} top ${cid}`,
-                  { timeout: 5000 },
-                );
-                topOut = result.stdout;
-              }
-              const topLines = topOut.trim().split("\n");
-              if (topLines.length >= 2) {
-                // Parse USER column from header position
-                const header = topLines[0];
-                const userIdx = header.split(/\s+/).findIndex(
-                  (h) => h.toUpperCase() === "USER" || h.toUpperCase() === "UID",
-                );
-                const user = topLines[1].trim().split(/\s+/)[userIdx >= 0 ? userIdx : 1]
-                  || topLines[1].trim().split(/\s+/)[0];
-                if (user) {
-                  // Resolve numeric UIDs
-                  const numericUid = parseInt(user);
-                  if (!isNaN(numericUid)) {
-                    ownerMap.set(name, await resolveUid(numericUid));
-                  } else {
-                    ownerMap.set(name, user);
-                  }
-                }
-              }
-            } catch (e) {
-              log(`[owner] owner resolution failed for container ${name} (${cid}): ${e}`);
-            }
-          });
-          await Promise.all(topPromises);
-        }
-      }
+      // Resolve owners with cache
+      await this.resolveOwners(lines, pids, platform);
 
       const results: ContainerFullInfo[] = [];
       for (let i = 0; i < lines.length; i++) {
@@ -199,22 +144,21 @@ export class DockerCollector implements IDockerCollector {
         const status = parts[2] || "";
         const composeProject = parts[3] || "";
         const image = parts[4] || "";
-        const portsRaw = parts.slice(5).join("|") || ""; // ports may contain pipes
+        const portsRaw = parts.slice(5).join("|") || "";
         const pid = pids[i] || 0;
-        const ownerName = ownerMap.get(name) || "?";
+        const cid = fullId.substring(0, 12);
+        const ownerName = this.ownerCache.get(cid) || "?";
 
-        // Parse health from status string (e.g. "Up 2 hours (healthy)")
         let health: ContainerFullInfo["health"] = "none";
         if (status.includes("(healthy)")) health = "healthy";
         else if (status.includes("(unhealthy)")) health = "unhealthy";
         else if (status.includes("(health: starting)") || status.includes("health: starting")) health = "starting";
 
-        // Parse uptime from status (e.g. "Up 2 hours", "Up 3 days")
         const uptimeMatch = status.match(/Up\s+(.+?)(?:\s+\(|$)/);
         const uptime = uptimeMatch ? uptimeMatch[1].trim() : "";
 
         results.push({
-          id: fullId.substring(0, 12),
+          id: cid,
           name,
           mainPid: pid,
           ownerUid: -1,
@@ -226,10 +170,94 @@ export class DockerCollector implements IDockerCollector {
           ports: portsRaw,
         });
       }
+      this.lastContainerList = results;
       return results;
     } catch (e) {
       log(`[containers] getAllRunningContainers failed: ${e}`);
       return [];
+    }
+  }
+
+  /**
+   * Resolve container owners with a TTL cache.
+   * Only re-resolves containers not already in cache or when cache expires.
+   */
+  private async resolveOwners(
+    lines: string[],
+    pids: number[],
+    platform: string,
+  ): Promise<void> {
+    const cacheExpired = Date.now() - this.lastOwnerTime > OWNER_CACHE_TTL;
+
+    // Find which containers need owner resolution
+    const needResolution: Array<{ cid: string; name: string; pid: number }> = [];
+    for (let i = 0; i < lines.length; i++) {
+      const parts = lines[i].split("|");
+      const cid = parts[0].substring(0, 12);
+      const name = parts[1];
+      if (cacheExpired || !this.ownerCache.has(cid)) {
+        needResolution.push({ cid, name, pid: pids[i] || 0 });
+      }
+    }
+
+    if (needResolution.length === 0) return;
+
+    if (platform === "linux" || platform === "darwin") {
+      // Try /proc-based resolution first
+      let procWorks = false;
+      const testPid = needResolution.find((c) => c.pid > 0)?.pid;
+      if (testPid) {
+        const testStatus = readProcFile(`/proc/${testPid}/status`);
+        procWorks = testStatus.length > 0;
+      }
+
+      if (procWorks) {
+        for (const { cid, pid } of needResolution) {
+          if (pid > 0) {
+            const status = readProcFile(`/proc/${pid}/status`);
+            const uidMatch = status.match(/Uid:\s+(\d+)/);
+            if (uidMatch) {
+              this.ownerCache.set(cid, await resolveUid(parseInt(uidMatch[1])));
+            }
+          }
+        }
+      } else {
+        // /proc not accessible — use docker inspect (single batch, no docker top)
+        logDebug("[owner] /proc not accessible, resolving owners via docker inspect");
+        const promises = needResolution.map(async ({ cid, name }) => {
+          try {
+            const { stdout: inspectOut } = await execCommand(
+              `${this.docker} inspect --format '{{.Config.User}}' ${cid}`,
+              { timeout: 5000 },
+            );
+            const configUser = inspectOut.trim();
+            if (configUser && configUser !== "''" && configUser !== "''") {
+              const userPart = configUser.split(":")[0];
+              const numericUid = parseInt(userPart);
+              if (!isNaN(numericUid)) {
+                this.ownerCache.set(cid, await resolveUid(numericUid));
+              } else {
+                this.ownerCache.set(cid, userPart);
+              }
+              return;
+            }
+            // If Config.User is empty, mark as "root" (Docker default)
+            this.ownerCache.set(cid, "root");
+          } catch (e) {
+            logDebug(`[owner] owner resolution failed for ${name} (${cid}): ${e}`);
+            this.ownerCache.set(cid, "?");
+          }
+        });
+        await Promise.all(promises);
+      }
+    }
+
+    this.lastOwnerTime = Date.now();
+
+    // Clean up cache entries for containers that no longer exist
+    const currentIds = new Set(lines.map((l) => l.split("|")[0].substring(0, 12)));
+    for (const key of this.ownerCache.keys()) {
+      if (!currentIds.has(key)) this.ownerCache.delete(key);
     }
   }
 

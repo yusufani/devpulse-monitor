@@ -42,14 +42,14 @@
       "properties": {
         "dockerMonitor.refreshInterval": {
           "type": "number",
-          "default": 10,
-          "minimum": 2,
+          "default": 30,
+          "minimum": 5,
           "description": "Refresh interval in seconds for sidebar monitoring"
         },
         "dockerMonitor.webviewRefreshInterval": {
           "type": "number",
-          "default": 5,
-          "minimum": 2,
+          "default": 10,
+          "minimum": 5,
           "description": "Refresh interval in seconds for webview panel"
         },
         "dockerMonitor.gpuMonitoring": {
@@ -88,6 +88,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable VRAM memory leak detection (monotonic growth alerts)"
+        },
+        "dockerMonitor.debugLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose debug logging (owner resolution, docker top, /proc fallback details)"
         }
       }
     },

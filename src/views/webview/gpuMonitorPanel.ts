@@ -82,7 +82,7 @@ export class GpuMonitorPanel implements vscode.Disposable {
     this.refresh();
     this.refreshIntervalSec = vscode.workspace
       .getConfiguration("dockerMonitor")
-      .get<number>("webviewRefreshInterval", 5);
+      .get<number>("webviewRefreshInterval", 10);
     this.interval = setInterval(() => this.refresh(), this.refreshIntervalSec * 1000);
   }
 

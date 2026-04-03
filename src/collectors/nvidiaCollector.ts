@@ -3,7 +3,7 @@ import { IGpuCollector } from "./interfaces";
 import { GpuInfo, GpuProcess } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
 import { detectPlatform } from "../utils/platform";
-import { log } from "../utils/logger";
+import { log, logDebug } from "../utils/logger";
 
 function readProcFile(filePath: string): string {
   try {
@@ -49,7 +49,7 @@ async function resolveUidAsync(uid: number): Promise<string> {
       return name;
     }
   } catch (e) {
-    log(`[nvidia] id -un ${uid} failed: ${e}`);
+    logDebug(`[nvidia] id -un ${uid} failed: ${e}`);
   }
   return cached;
 }
@@ -126,86 +126,90 @@ interface DockerPidMap {
   pidToDetail: Map<number, DockerPidDetail>;
 }
 
+// PID map cache — avoids docker top spam
+let _cachedPidMap: DockerPidMap | null = null;
+let _pidMapTime = 0;
+const PID_MAP_CACHE_TTL = 25_000; // 25s — matches stats cache TTL
+
 async function buildDockerPidMap(
   docker: string,
   cnameMap: Map<string, string>,
 ): Promise<DockerPidMap> {
+  // Return cached map if fresh
+  if (_cachedPidMap && Date.now() - _pidMapTime < PID_MAP_CACHE_TTL) {
+    return _cachedPidMap;
+  }
+
   const pidToDetail = new Map<number, DockerPidDetail>();
 
   try {
-    // Get all container IDs
-    const { stdout } = await execCommand(`${docker} ps --no-trunc --format "{{.ID}}|{{.Names}}"`);
-    const lines = stdout.trim().split("\n").filter((l) => l.includes("|"));
+    // Reuse the container name map passed in (already from docker ps)
+    const entries = Array.from(cnameMap.entries());
+    if (entries.length === 0) {
+      return { pidToDetail };
+    }
+
+    const platform = detectPlatform();
 
     // For each container, get rich per-PID detail via docker top
-    const promises = lines.map(async (line) => {
-      const [fullId, name] = line.split("|", 2);
-      const cid = fullId.substring(0, 12);
-      try {
-        const platform = detectPlatform();
-        // macOS Docker Desktop uses BSD ps (-o not -eo)
-        const topCmd = platform === "darwin"
-          ? `${docker} top ${cid} -o pid,user,uid,rss,args`
-          : `${docker} top ${cid} -eo pid,user,uid,rss,args`;
-        let topOut = "";
+    // Limit concurrency to avoid spawning too many processes
+    const BATCH_SIZE = 5;
+    for (let b = 0; b < entries.length; b += BATCH_SIZE) {
+      const batch = entries.slice(b, b + BATCH_SIZE);
+      const promises = batch.map(async ([cid, name]) => {
         try {
-          const result = await execCommand(topCmd, { timeout: 5000 });
-          topOut = result.stdout;
+          const topCmd = platform === "darwin"
+            ? `${docker} top ${cid} -o pid,user,uid,rss,args`
+            : `${docker} top ${cid} -eo pid,user,uid,rss,args`;
+          let topOut = "";
+          try {
+            const result = await execCommand(topCmd, { timeout: 5000 });
+            topOut = result.stdout;
+          } catch {
+            // Skip this container on failure — don't retry with default format
+            return;
+          }
+          const topLines = topOut.trim().split("\n");
+          if (topLines.length < 2) return;
+
+          const header = topLines[0];
+          const argsCol = header.indexOf("ARGS") >= 0 ? header.indexOf("ARGS") : header.indexOf("COMMAND");
+          if (argsCol < 0) return;
+
+          for (let i = 1; i < topLines.length; i++) {
+            const row = topLines[i];
+            if (!row.trim()) continue;
+
+            const fields = row.trim().split(/\s+/);
+            const pid = parseInt(fields[0]);
+            if (isNaN(pid)) continue;
+
+            const user = fields[1] || "?";
+            const uid = parseInt(fields[2]) || -1;
+            const rssKb = parseInt(fields[3]) || 0;
+            const cmdline = argsCol < row.length ? row.substring(argsCol).trim() : fields.slice(4).join(" ");
+
+            pidToDetail.set(pid, {
+              container: { id: cid, name: cnameMap.get(cid) || name },
+              user,
+              uid,
+              rssMib: Math.round(rssKb / 1024),
+              cmdline,
+            });
+          }
         } catch (e) {
-          log(`[pidmap] docker top extended format failed for ${cid}, falling back: ${e}`);
-          // Fallback to default docker top format
-          const result = await execCommand(
-            `${docker} top ${cid}`,
-            { timeout: 5000 },
-          );
-          topOut = result.stdout;
+          logDebug(`[pidmap] docker top failed for container ${cid}: ${e}`);
         }
-        const topLines = topOut.trim().split("\n");
-        if (topLines.length < 2) return;
-
-        // Parse column positions from header (args can contain spaces)
-        const header = topLines[0];
-        const pidCol = header.indexOf("PID");
-        const userCol = header.indexOf("USER");
-        const uidCol = header.indexOf("UID");
-        const rssCol = header.indexOf("RSS");
-        const argsCol = header.indexOf("ARGS") >= 0 ? header.indexOf("ARGS") : header.indexOf("COMMAND");
-        if (argsCol < 0) return;
-
-        for (let i = 1; i < topLines.length; i++) {
-          const row = topLines[i];
-          if (!row.trim()) continue;
-
-          // Extract fields by column positions
-          const fields = row.trim().split(/\s+/);
-          const pid = parseInt(fields[0]);
-          if (isNaN(pid)) continue;
-
-          const user = fields[1] || "?";
-          const uid = parseInt(fields[2]) || -1;
-          const rssKb = parseInt(fields[3]) || 0;
-          // args is everything from argsCol onward (may contain spaces)
-          const cmdline = argsCol < row.length ? row.substring(argsCol).trim() : fields.slice(4).join(" ");
-
-          pidToDetail.set(pid, {
-            container: { id: cid, name: cnameMap.get(cid) || name },
-            user,
-            uid,
-            rssMib: Math.round(rssKb / 1024),
-            cmdline,
-          });
-        }
-      } catch (e) {
-        log(`[pidmap] docker top failed for container ${cid}: ${e}`);
-      }
-    });
-
-    await Promise.all(promises);
+      });
+      await Promise.all(promises);
+    }
   } catch (e) {
-    log(`[pidmap] buildDockerPidMap failed: ${e}`);
+    logDebug(`[pidmap] buildDockerPidMap failed: ${e}`);
   }
 
-  return { pidToDetail };
+  _cachedPidMap = { pidToDetail };
+  _pidMapTime = Date.now();
+  return _cachedPidMap;
 }
 
 // ── NvidiaCollector ────────────────────────────────────────────
@@ -280,7 +284,7 @@ export class NvidiaCollector implements IGpuCollector {
       if (this._procAccessible === null) {
         this._procAccessible = canAccessHostProc(rawProcs[0].pid);
         if (!this._procAccessible) {
-          log("[nvidia] /proc not accessible, using docker fallback for process resolution");
+          logDebug("[nvidia] /proc not accessible, using docker fallback for process resolution");
         }
       }
 
