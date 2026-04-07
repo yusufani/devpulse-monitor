@@ -38,6 +38,22 @@ function tempColorHex(temp: number): string {
   return "#4ec9b0";
 }
 
+/** Build a terminal-style segmented bar for VRAM user breakdown */
+function termBarSegmented(users: UserVram[], freeVram: number, total: number, width: number = 24): string {
+  if (total <= 0) return "\u2591".repeat(width);
+  let bar = "";
+  let usedCols = 0;
+  for (const u of users) {
+    const cols = Math.max(1, Math.round((u.vram / total) * width));
+    bar += `</span><span style="color:${getUserHexColor(u.username)}">${"\u2588".repeat(Math.min(cols, width - usedCols))}`;
+    usedCols += cols;
+  }
+  if (usedCols < width) {
+    bar += `</span><span style="color:#555">${"\u2591".repeat(width - usedCols)}`;
+  }
+  return bar + "</span><span>";
+}
+
 function buildGpuTooltip(
   gpu: GpuInfo,
   processes: GpuProcess[],
@@ -49,51 +65,38 @@ function buildGpuTooltip(
 
   const pct = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * 100) : 0;
   const users = getGpuUserVram(gpu, processes, containers);
-  const barW = 240;
-  const pctColor = pct > 90 ? "#FF4444" : pct > 70 ? "#CCCC00" : "#4ec9b0";
+  const vramCol = pct > 90 ? "#FF4444" : pct > 70 ? "#CCCC00" : "#4ec9b0";
   const tempCol = tempColorHex(gpu.temp);
+  const utilCol = gpu.util > 90 ? "#FF4444" : gpu.util > 70 ? "#CCCC00" : "#4ec9b0";
+  const barW = 24;
 
-  let html = `<div style="font-family:monospace;min-width:260px">`;
+  let html = `<div style="font-family:monospace;white-space:pre;line-height:1.5">`;
 
   // Header
-  html += `<div style="font-size:13px;margin-bottom:6px"><strong>GPU ${gpu.index}</strong> · ${gpu.name}</div>`;
+  html += `<strong>GPU ${gpu.index}</strong> \u00B7 ${gpu.name}\n\n`;
 
-  // Stats row
-  html += `<div style="display:flex;gap:16px;margin-bottom:8px">`;
-  html += `<span>VRAM <strong style="color:${pctColor}">${pct}%</strong></span>`;
-  html += `<span>Util <strong>${gpu.util}%</strong></span>`;
-  html += `<span>Temp <strong style="color:${tempCol}">${gpu.temp}\u00B0C</strong></span>`;
-  html += `<span>Power <strong>${gpu.power.toFixed(0)}W</strong></span>`;
-  html += `</div>`;
+  // VRAM bar with user segments
+  const vramBar = termBarSegmented(users, gpu.memFree, gpu.memTotal, barW);
+  html += `<span style="color:#9cdcfe">VRAM</span>  <span>[${vramBar}]</span> <strong style="color:${vramCol}">${pct.toString().padStart(3)}%</strong>\n`;
+  html += `<span style="color:#999">       ${fmtMem(gpu.memUsed)} / ${fmtMem(gpu.memTotal)}</span>\n\n`;
 
-  // VRAM bar
-  html += `<div style="margin-bottom:4px;color:#999;font-size:11px">${fmtMem(gpu.memUsed)} / ${fmtMem(gpu.memTotal)}</div>`;
-  html += `<div style="display:flex;width:${barW}px;height:14px;border:1px solid #555;border-radius:4px;overflow:hidden;margin-bottom:8px">`;
-  for (const u of users) {
-    const w = gpu.memTotal > 0 ? Math.max(2, Math.round((u.vram / gpu.memTotal) * barW)) : 0;
-    html += `<div style="width:${w}px;height:100%;background:${getUserHexColor(u.username)}"></div>`;
-  }
-  if (gpu.memFree > 0) {
-    html += `<div style="flex:1;height:100%;background:#2a2a2a"></div>`;
-  }
-  html += `</div>`;
+  // Util bar
+  const utilBar = termBar(gpu.util, barW);
+  html += `<span style="color:#9cdcfe">Util</span>  <span style="color:${utilCol}">[${utilBar}]</span> <strong style="color:${utilCol}">${gpu.util.toString().padStart(3)}%</strong>\n\n`;
+
+  // Temp & Power inline
+  html += `<span style="color:#9cdcfe">Temp</span>  <strong style="color:${tempCol}">${gpu.temp}\u00B0C</strong>    <span style="color:#9cdcfe">Power</span>  <strong>${gpu.power.toFixed(0)}W</strong>\n`;
 
   // User legend
   if (users.length > 0) {
+    html += `\n`;
     for (const u of users) {
       const p = gpu.memTotal > 0 ? Math.round((u.vram / gpu.memTotal) * 100) : 0;
-      html += `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">`;
-      html += `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${getUserHexColor(u.username)}"></span>`;
-      html += `<span>${u.username}</span>`;
-      html += `<span style="color:#999">${fmtMem(u.vram)} (${p}%)</span>`;
-      html += `</div>`;
+      html += `<span style="color:${getUserHexColor(u.username)}">\u2588\u2588</span> ${u.username.padEnd(12)} <span style="color:#999">${fmtMem(u.vram).padStart(8)} (${p}%)</span>\n`;
     }
     if (gpu.memFree > 0) {
       const fp = gpu.memTotal > 0 ? Math.round((gpu.memFree / gpu.memTotal) * 100) : 0;
-      html += `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">`;
-      html += `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#2a2a2a;border:1px solid #555"></span>`;
-      html += `<span style="color:#666">free ${fmtMem(gpu.memFree)} (${fp}%)</span>`;
-      html += `</div>`;
+      html += `<span style="color:#555">\u2591\u2591</span> <span style="color:#666">free${" ".repeat(9)}${fmtMem(gpu.memFree).padStart(8)} (${fp}%)</span>\n`;
     }
   }
 
@@ -102,59 +105,85 @@ function buildGpuTooltip(
   return md;
 }
 
-function diskColor(pct: number): string {
-  if (pct > 90) return "#FF4444";
-  if (pct > 75) return "#CCCC00";
-  return "#4ec9b0";
-}
-
 function fmtGib(gib: number): string {
   if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TiB`;
   return `${gib.toFixed(1)} GiB`;
 }
 
-function buildSystemTooltip(cpuPct: number, memPct: number, memUsed: number, memTotal: number, disks: DiskInfo[]): vscode.MarkdownString {
+/** Terminal-style block bar: [████████░░░░░░] */
+function termBar(pct: number, width: number = 20): string {
+  const filled = Math.round((pct / 100) * width);
+  const empty = width - filled;
+  return "\u2588".repeat(filled) + "\u2591".repeat(empty);
+}
+
+function diskColorHex(pct: number): string {
+  if (pct > 90) return "#FF4444";
+  if (pct > 75) return "#CCCC00";
+  return "#4ec9b0";
+}
+
+function buildCpuTooltip(cpuPct: number): vscode.MarkdownString {
+  const md = new vscode.MarkdownString("", true);
+  md.supportHtml = true;
+  md.isTrusted = true;
+  const col = cpuPct > 80 ? "#FF4444" : cpuPct > 50 ? "#CCCC00" : "#4ec9b0";
+  const barW = 200;
+  let html = `<div style="font-family:monospace;min-width:220px">`;
+  html += `<div style="font-size:13px;margin-bottom:6px"><strong>CPU</strong></div>`;
+  html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>Usage</span><strong style="color:${col}">${cpuPct}%</strong></div>`;
+  html += `<div style="width:${barW}px;height:10px;background:#2a2a2a;border-radius:3px;overflow:hidden">`;
+  html += `<div style="width:${cpuPct}%;height:100%;background:${col};border-radius:3px"></div></div>`;
+  html += `</div>`;
+  md.value = html;
+  return md;
+}
+
+function buildRamTooltip(memPct: number, memUsed: number, memTotal: number): vscode.MarkdownString {
+  const md = new vscode.MarkdownString("", true);
+  md.supportHtml = true;
+  md.isTrusted = true;
+  const col = memPct > 80 ? "#FF4444" : memPct > 50 ? "#CCCC00" : "#4ec9b0";
+  const barW = 200;
+  let html = `<div style="font-family:monospace;min-width:220px">`;
+  html += `<div style="font-size:13px;margin-bottom:6px"><strong>RAM</strong></div>`;
+  html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>Usage</span><strong style="color:${col}">${memPct}%</strong></div>`;
+  html += `<div style="width:${barW}px;height:10px;background:#2a2a2a;border-radius:3px;overflow:hidden">`;
+  html += `<div style="width:${memPct}%;height:100%;background:${col};border-radius:3px"></div></div>`;
+  html += `<div style="color:#999;font-size:11px;margin-top:2px">${fmtMem(memUsed)} / ${fmtMem(memTotal)}</div>`;
+  html += `</div>`;
+  md.value = html;
+  return md;
+}
+
+function buildDiskTooltip(disks: DiskInfo[]): vscode.MarkdownString {
   const md = new vscode.MarkdownString("", true);
   md.supportHtml = true;
   md.isTrusted = true;
 
-  const cpuCol = cpuPct > 80 ? "#FF4444" : cpuPct > 50 ? "#CCCC00" : "#4ec9b0";
-  const ramCol = memPct > 80 ? "#FF4444" : memPct > 50 ? "#CCCC00" : "#4ec9b0";
-  const barW = 240;
+  if (disks.length === 0) {
+    md.value = `<div style="font-family:monospace">No disks detected</div>`;
+    return md;
+  }
 
-  let html = `<div style="font-family:monospace;min-width:260px">`;
-  html += `<div style="font-size:13px;margin-bottom:8px"><strong>System</strong></div>`;
+  // Find longest mount label for alignment
+  const labels = disks.map((d) => d.mount.length > 18 ? "..." + d.mount.slice(-15) : d.mount);
+  const maxLabel = Math.max(...labels.map((l) => l.length));
+  const barWidth = 24;
 
-  // CPU bar
-  html += `<div style="margin-bottom:6px">`;
-  html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>CPU</span><strong style="color:${cpuCol}">${cpuPct}%</strong></div>`;
-  html += `<div style="width:${barW}px;height:10px;background:#2a2a2a;border-radius:3px;overflow:hidden">`;
-  html += `<div style="width:${cpuPct}%;height:100%;background:${cpuCol};border-radius:3px"></div></div></div>`;
+  let html = `<div style="font-family:monospace;white-space:pre;line-height:1.5">`;
+  html += `<strong>Disks</strong>\n\n`;
 
-  // RAM bar
-  html += `<div style="margin-bottom:6px">`;
-  html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>RAM</span><strong style="color:${ramCol}">${memPct}%</strong></div>`;
-  html += `<div style="width:${barW}px;height:10px;background:#2a2a2a;border-radius:3px;overflow:hidden">`;
-  html += `<div style="width:${memPct}%;height:100%;background:${ramCol};border-radius:3px"></div></div>`;
-  html += `<div style="color:#999;font-size:11px;margin-top:2px">${fmtMem(memUsed)} / ${fmtMem(memTotal)}</div></div>`;
+  for (let i = 0; i < disks.length; i++) {
+    const d = disks[i];
+    const col = diskColorHex(d.usedPercent);
+    const label = labels[i].padEnd(maxLabel);
+    const bar = termBar(d.usedPercent, barWidth);
+    const pctStr = `${d.usedPercent}%`.padStart(4);
 
-  // Disk bars
-  if (disks.length > 0) {
-    html += `<div style="border-top:1px solid #444;margin-top:8px;padding-top:8px">`;
-    html += `<div style="font-size:12px;margin-bottom:6px"><strong>Disks</strong></div>`;
-    for (const d of disks) {
-      const col = diskColor(d.usedPercent);
-      const label = d.mount.length > 20 ? "..." + d.mount.slice(-17) : d.mount;
-      html += `<div style="margin-bottom:6px">`;
-      html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px">`;
-      html += `<span style="font-size:11px" title="${d.device} → ${d.mount}">${label}</span>`;
-      html += `<strong style="color:${col};font-size:11px">${d.usedPercent}%</strong></div>`;
-      html += `<div style="width:${barW}px;height:8px;background:#2a2a2a;border-radius:3px;overflow:hidden">`;
-      html += `<div style="width:${d.usedPercent}%;height:100%;background:${col};border-radius:3px"></div></div>`;
-      html += `<div style="color:#999;font-size:10px;margin-top:1px">${d.device} · ${fmtGib(d.usedGib)} / ${fmtGib(d.totalGib)} · free ${fmtGib(d.freeGib)}</div>`;
-      html += `</div>`;
-    }
-    html += `</div>`;
+    html += `<span style="color:#9cdcfe">${label}</span> <span style="color:${col}">[${bar}]</span> <strong style="color:${col}">${pctStr}</strong>\n`;
+    html += `<span style="color:#666">${" ".repeat(maxLabel)} ${d.device}</span>\n`;
+    html += `<span style="color:#999">${" ".repeat(maxLabel)} ${fmtGib(d.usedGib)} / ${fmtGib(d.totalGib)}  free ${fmtGib(d.freeGib)}</span>\n\n`;
   }
 
   html += `</div>`;
@@ -164,14 +193,25 @@ function buildSystemTooltip(cpuPct: number, memPct: number, memUsed: number, mem
 
 export class StatusBarController implements vscode.Disposable {
   private gpuItems: vscode.StatusBarItem[] = [];
-  private sysItem: vscode.StatusBarItem;
+  private cpuItem: vscode.StatusBarItem;
+  private ramItem: vscode.StatusBarItem;
+  private diskItem: vscode.StatusBarItem;
   private subscription: vscode.Disposable;
 
   constructor(monitor: MonitorService) {
-    // System item (rightmost, lowest priority)
-    this.sysItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -110);
-    this.sysItem.command = "gpuMonitor.refresh";
-    this.sysItem.show();
+    // CPU item
+    this.cpuItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -108);
+    this.cpuItem.command = "gpuMonitor.refresh";
+    this.cpuItem.show();
+
+    // RAM item
+    this.ramItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -109);
+    this.ramItem.command = "gpuMonitor.refresh";
+    this.ramItem.show();
+
+    // Disk item
+    this.diskItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -110);
+    this.diskItem.command = "gpuMonitor.refresh";
 
     this.subscription = monitor.onDataUpdated((data) => {
       // Ensure we have the right number of GPU items
@@ -196,25 +236,38 @@ export class StatusBarController implements vscode.Disposable {
         item.tooltip = buildGpuTooltip(g, data.gpuData.processes, data.containers);
       }
 
-      // Update system item
+      // CPU item
+      const cpuPct = data.system.cpuPercent;
+      this.cpuItem.text = `$(dashboard) CPU ${cpuPct}%`;
+      this.cpuItem.color = pctColor(cpuPct);
+      this.cpuItem.tooltip = buildCpuTooltip(cpuPct);
+
+      // RAM item
       const memPct =
         data.system.memTotalMib > 0 ? Math.round((data.system.memUsedMib / data.system.memTotalMib) * 100) : 0;
-      const cpuPct = data.system.cpuPercent;
+      this.ramItem.text = `$(database) RAM ${memPct}%`;
+      this.ramItem.color = pctColor(memPct);
+      this.ramItem.tooltip = buildRamTooltip(memPct, data.system.memUsedMib, data.system.memTotalMib);
+
+      // Disk item — show worst disk
       const disks = data.system.disks || [];
-      // Show worst (most-used) disk in status bar
-      const worstDisk = disks.length > 0 ? disks.reduce((a, b) => a.usedPercent > b.usedPercent ? a : b) : null;
-      const diskStr = worstDisk ? ` $(server) Disk ${worstDisk.usedPercent}%` : "";
-      this.sysItem.text = `$(dashboard) CPU ${cpuPct}% $(database) RAM ${memPct}%${diskStr}`;
-      // Color based on worst metric
-      const worstSys = Math.max(cpuPct, memPct, worstDisk?.usedPercent ?? 0);
-      this.sysItem.color = pctColor(worstSys);
-      this.sysItem.tooltip = buildSystemTooltip(cpuPct, memPct, data.system.memUsedMib, data.system.memTotalMib, disks);
+      if (disks.length > 0) {
+        const worstDisk = disks.reduce((a, b) => a.usedPercent > b.usedPercent ? a : b);
+        this.diskItem.text = `$(server) Disk ${worstDisk.usedPercent}%`;
+        this.diskItem.color = pctColor(worstDisk.usedPercent);
+        this.diskItem.tooltip = buildDiskTooltip(disks);
+        this.diskItem.show();
+      } else {
+        this.diskItem.hide();
+      }
     });
   }
 
   dispose(): void {
     this.subscription.dispose();
     for (const item of this.gpuItems) item.dispose();
-    this.sysItem.dispose();
+    this.cpuItem.dispose();
+    this.ramItem.dispose();
+    this.diskItem.dispose();
   }
 }
