@@ -1,4 +1,5 @@
 import { readFileSync } from "fs";
+import { execSync } from "child_process";
 import { IGpuCollector } from "./interfaces";
 import { GpuInfo, GpuProcess } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
@@ -107,7 +108,6 @@ let _clkTck: number | null = null;
 function getClkTck(): number {
   if (_clkTck !== null) return _clkTck;
   try {
-    const { execSync } = require("child_process");
     _clkTck = parseInt(execSync("getconf CLK_TCK", { encoding: "utf-8" }).trim()) || 100;
   } catch {
     _clkTck = 100; // Linux default
