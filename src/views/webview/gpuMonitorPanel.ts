@@ -95,6 +95,7 @@ export class GpuMonitorPanel implements vscode.Disposable {
         this.monitor.getGpuData(),
         this.refreshIntervalSec,
         this.monitor.getGpuHistory(),
+        this.monitor.getContainers(),
       );
       this.firstRender = false;
     } else {
@@ -103,6 +104,7 @@ export class GpuMonitorPanel implements vscode.Disposable {
         this.monitor.getGpuData(),
         this.refreshIntervalSec,
         this.monitor.getGpuHistory(),
+        this.monitor.getContainers(),
       );
       this.panel.webview.postMessage({ type: "update", ...data });
     }

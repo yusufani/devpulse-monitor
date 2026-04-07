@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { MonitorService } from "../services/monitorService";
-import { GpuInfo, GpuProcess, ContainerFullInfo } from "../types";
+import { GpuInfo, GpuProcess, ContainerFullInfo, DiskInfo } from "../types";
 import { fmtMem } from "../utils/format";
 import { getUserHexColor } from "./treeItems";
 
@@ -102,16 +102,27 @@ function buildGpuTooltip(
   return md;
 }
 
-function buildSystemTooltip(cpuPct: number, memPct: number, memUsed: number, memTotal: number): vscode.MarkdownString {
+function diskColor(pct: number): string {
+  if (pct > 90) return "#FF4444";
+  if (pct > 75) return "#CCCC00";
+  return "#4ec9b0";
+}
+
+function fmtGib(gib: number): string {
+  if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TiB`;
+  return `${gib.toFixed(1)} GiB`;
+}
+
+function buildSystemTooltip(cpuPct: number, memPct: number, memUsed: number, memTotal: number, disks: DiskInfo[]): vscode.MarkdownString {
   const md = new vscode.MarkdownString("", true);
   md.supportHtml = true;
   md.isTrusted = true;
 
   const cpuCol = cpuPct > 80 ? "#FF4444" : cpuPct > 50 ? "#CCCC00" : "#4ec9b0";
   const ramCol = memPct > 80 ? "#FF4444" : memPct > 50 ? "#CCCC00" : "#4ec9b0";
-  const barW = 200;
+  const barW = 240;
 
-  let html = `<div style="font-family:monospace;min-width:220px">`;
+  let html = `<div style="font-family:monospace;min-width:260px">`;
   html += `<div style="font-size:13px;margin-bottom:8px"><strong>System</strong></div>`;
 
   // CPU bar
@@ -121,11 +132,30 @@ function buildSystemTooltip(cpuPct: number, memPct: number, memUsed: number, mem
   html += `<div style="width:${cpuPct}%;height:100%;background:${cpuCol};border-radius:3px"></div></div></div>`;
 
   // RAM bar
-  html += `<div>`;
+  html += `<div style="margin-bottom:6px">`;
   html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px"><span>RAM</span><strong style="color:${ramCol}">${memPct}%</strong></div>`;
   html += `<div style="width:${barW}px;height:10px;background:#2a2a2a;border-radius:3px;overflow:hidden">`;
   html += `<div style="width:${memPct}%;height:100%;background:${ramCol};border-radius:3px"></div></div>`;
   html += `<div style="color:#999;font-size:11px;margin-top:2px">${fmtMem(memUsed)} / ${fmtMem(memTotal)}</div></div>`;
+
+  // Disk bars
+  if (disks.length > 0) {
+    html += `<div style="border-top:1px solid #444;margin-top:8px;padding-top:8px">`;
+    html += `<div style="font-size:12px;margin-bottom:6px"><strong>Disks</strong></div>`;
+    for (const d of disks) {
+      const col = diskColor(d.usedPercent);
+      const label = d.mount.length > 20 ? "..." + d.mount.slice(-17) : d.mount;
+      html += `<div style="margin-bottom:6px">`;
+      html += `<div style="display:flex;justify-content:space-between;margin-bottom:2px">`;
+      html += `<span style="font-size:11px" title="${d.device} → ${d.mount}">${label}</span>`;
+      html += `<strong style="color:${col};font-size:11px">${d.usedPercent}%</strong></div>`;
+      html += `<div style="width:${barW}px;height:8px;background:#2a2a2a;border-radius:3px;overflow:hidden">`;
+      html += `<div style="width:${d.usedPercent}%;height:100%;background:${col};border-radius:3px"></div></div>`;
+      html += `<div style="color:#999;font-size:10px;margin-top:1px">${d.device} · ${fmtGib(d.usedGib)} / ${fmtGib(d.totalGib)} · free ${fmtGib(d.freeGib)}</div>`;
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
 
   html += `</div>`;
   md.value = html;
@@ -170,11 +200,15 @@ export class StatusBarController implements vscode.Disposable {
       const memPct =
         data.system.memTotalMib > 0 ? Math.round((data.system.memUsedMib / data.system.memTotalMib) * 100) : 0;
       const cpuPct = data.system.cpuPercent;
-      this.sysItem.text = `$(dashboard) CPU ${cpuPct}% $(database) RAM ${memPct}%`;
+      const disks = data.system.disks || [];
+      // Show worst (most-used) disk in status bar
+      const worstDisk = disks.length > 0 ? disks.reduce((a, b) => a.usedPercent > b.usedPercent ? a : b) : null;
+      const diskStr = worstDisk ? ` $(server) Disk ${worstDisk.usedPercent}%` : "";
+      this.sysItem.text = `$(dashboard) CPU ${cpuPct}% $(database) RAM ${memPct}%${diskStr}`;
       // Color based on worst metric
-      const worstSys = Math.max(cpuPct, memPct);
+      const worstSys = Math.max(cpuPct, memPct, worstDisk?.usedPercent ?? 0);
       this.sysItem.color = pctColor(worstSys);
-      this.sysItem.tooltip = buildSystemTooltip(cpuPct, memPct, data.system.memUsedMib, data.system.memTotalMib);
+      this.sysItem.tooltip = buildSystemTooltip(cpuPct, memPct, data.system.memUsedMib, data.system.memTotalMib, disks);
     });
   }
 

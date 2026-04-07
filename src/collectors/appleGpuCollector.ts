@@ -162,6 +162,7 @@ export class AppleGpuCollector implements IGpuCollector {
             ramMib: Math.round(rssKb / 1024),
             uid,
             username: user,
+            startTime: 0,
           });
         }
       }
@@ -204,6 +205,7 @@ export class AppleGpuCollector implements IGpuCollector {
             ramMib: Math.round(rssKb / 1024),
             uid,
             username: user,
+            startTime: 0,
           });
         }
       } catch (e) {

@@ -24,7 +24,7 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
   private _onDidChangeTreeData = new vscode.EventEmitter<SidebarItem | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  private system: SystemInfo = { cpuPercent: 0, memUsedMib: 0, memTotalMib: 0 };
+  private system: SystemInfo = { cpuPercent: 0, memUsedMib: 0, memTotalMib: 0, disks: [] };
   private gpus: GpuInfo[] = [];
   private gpuProcesses: GpuProcess[] = [];
   private containers: ContainerFullInfo[] = [];

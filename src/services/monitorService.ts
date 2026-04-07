@@ -9,7 +9,7 @@ export class MonitorService implements vscode.Disposable {
   private _onDataUpdated = new vscode.EventEmitter<MonitorData>();
   readonly onDataUpdated = this._onDataUpdated.event;
 
-  private system: SystemInfo = { cpuPercent: 0, memUsedMib: 0, memTotalMib: 0 };
+  private system: SystemInfo = { cpuPercent: 0, memUsedMib: 0, memTotalMib: 0, disks: [] };
   private gpuData: GpuData = { gpus: [], processes: [], containerStats: new Map(), timestamp: 0, error: "" };
   private containers: ContainerFullInfo[] = [];
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;

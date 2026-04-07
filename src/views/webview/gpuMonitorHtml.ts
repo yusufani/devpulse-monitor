@@ -1,7 +1,28 @@
-import { GpuData, GpuInfo, GpuProcess } from "../../types";
+import { GpuData, GpuInfo, GpuProcess, ContainerFullInfo } from "../../types";
 import { fmtMem } from "../../utils/format";
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function fmtUptime(startTime: number): string {
+  if (!startTime) return "";
+  const elapsed = Date.now() - startTime;
+  if (elapsed < 0) return "";
+  const sec = Math.floor(elapsed / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ${min % 60}m`;
+  const days = Math.floor(hr / 24);
+  return `${days}d ${hr % 24}h`;
+}
+
+function fmtStartDate(startTime: number): string {
+  if (!startTime) return "";
+  const d = new Date(startTime);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 function bar(used: number, total: number, id?: string): string {
   const pct = total > 0 ? (used / total) * 100 : 0;
@@ -98,7 +119,7 @@ function renderMultiGpuSummary(gpus: GpuInfo[]): string {
   </div>`;
 }
 
-function renderContainerSummary(data: GpuData): string {
+function renderContainerSummary(data: GpuData, containers: ContainerFullInfo[]): string {
   const { processes, containerStats, gpus } = data;
   const containerGpu: Record<string, Record<number, number>> = {};
   const cnameToId: Record<string, string> = {};
@@ -109,6 +130,12 @@ function renderContainerSummary(data: GpuData): string {
     if (p.containerId) cnameToId[cn] = p.containerId;
   }
 
+  // Add all containers (even those without GPU processes)
+  for (const c of containers) {
+    if (!cnameToId[c.name]) cnameToId[c.name] = c.id;
+    if (!containerGpu[c.name]) containerGpu[c.name] = {};
+  }
+
   const gpuIndices = gpus.map((g) => g.index).sort((a, b) => a - b);
   const sc = Object.entries(containerGpu).sort(
     (a, b) =>
@@ -117,7 +144,7 @@ function renderContainerSummary(data: GpuData): string {
 
   let headers = `<th>Container</th>`;
   for (const gi of gpuIndices) headers += `<th>G${gi}</th>`;
-  headers += `<th>VRAM</th><th>CPU</th><th>RAM</th><th></th>`;
+  headers += `<th>VRAM</th><th>CPU</th><th>RAM</th><th>Net I/O</th><th>Disk I/O</th><th></th>`;
 
   let rows = "";
   for (const [cn, gm] of sc) {
@@ -126,9 +153,11 @@ function renderContainerSummary(data: GpuData): string {
     const cid = cnameToId[cn] || "";
     let cols = `<td class="name">${esc(cn)}</td>`;
     for (const gi of gpuIndices) cols += `<td class="${memClass(gm[gi] || 0)}">${gm[gi] ? fmtMem(gm[gi]) : "\u2014"}</td>`;
-    cols += `<td class="${memClass(tv)}"><b>${fmtMem(tv)}</b></td>`;
+    cols += `<td class="${memClass(tv)}"><b>${tv > 0 ? fmtMem(tv) : "\u2014"}</b></td>`;
     cols += `<td>${cs ? cs.cpuPercent.toFixed(1) + "%" : "\u2014"}</td>`;
     cols += `<td>${cs ? fmtMem(cs.memUsedMib) : "\u2014"}</td>`;
+    cols += `<td>${cs?.netIO || "\u2014"}</td>`;
+    cols += `<td>${cs?.blockIO || "\u2014"}</td>`;
     // Action buttons
     let actions = "";
     if (cn !== "(host)" && cid) {
@@ -181,9 +210,12 @@ function renderProcessGroups(data: GpuData): string {
       const last = i === procs.length - 1;
       const br = last ? "\u2514\u2500" : "\u251C\u2500";
       const co = last ? "  " : "\u2502 ";
-      const cmd = p.cmdline.length > 80 ? p.cmdline.substring(0, 77) + "..." : p.cmdline;
+      const cmd = p.cmdline.length > 120 ? p.cmdline.substring(0, 117) + "..." : p.cmdline;
       const cw = p.cwd.length > 40 ? "..." + p.cwd.substring(p.cwd.length - 37) : p.cwd;
-      html += `<div class="proc-row" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree">${br}</span><span class="pid">${p.pid}</span><span class="mem ${memClass(p.memMib)}">${fmtMem(p.memMib)}</span><span class="ram">${fmtMem(p.ramMib)}</span><span class="gpu-idx">G${p.gpuIndex}</span><span class="pname">${esc(p.processName)}</span><span class="user-tag">${esc(p.username)}</span><button class="btn-kill" onclick="killProc(${p.pid},'${esc(p.processName)}',${p.memMib})">\u00D7</button></div>`;
+      const upStr = fmtUptime(p.startTime);
+      const startStr = fmtStartDate(p.startTime);
+      const timeInfo = upStr ? `<span class="uptime" title="Started: ${startStr}">\u23F1 ${upStr}</span>` : "";
+      html += `<div class="proc-row" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree">${br}</span><span class="pid">${p.pid}</span><span class="mem ${memClass(p.memMib)}">${fmtMem(p.memMib)}</span><span class="ram">${fmtMem(p.ramMib)}</span><span class="gpu-idx">G${p.gpuIndex}</span><span class="pname">${esc(p.processName)}</span>${timeInfo}<span class="user-tag">${esc(p.username)}</span><button class="btn-kill" onclick="killProc(${p.pid},'${esc(p.processName)}',${p.memMib})">\u00D7</button></div>`;
       html += `<div class="proc-detail" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree dim">${co}</span><span class="dim">\u2514 ${esc(cw)}$ ${esc(cmd)}</span></div>`;
     }
   }
@@ -196,17 +228,18 @@ export interface GpuHistoryPoint {
 }
 
 /** Build JSON-serializable data for incremental updates */
-export function buildGpuMonitorData(data: GpuData, refreshIntervalSec = 5, history: GpuHistoryPoint[] = []): Record<string, unknown> {
+export function buildGpuMonitorData(data: GpuData, refreshIntervalSec = 5, history: GpuHistoryPoint[] = [], containers: ContainerFullInfo[] = []): Record<string, unknown> {
   const { gpus, processes, containerStats, error } = data;
 
-  // Serialize containerStats map
-  const statsObj: Record<string, { cpuPercent: number; memUsedMib: number; memLimitMib: number; memPercent: number }> = {};
+  // Serialize containerStats map (include netIO and blockIO)
+  const statsObj: Record<string, { cpuPercent: number; memUsedMib: number; memLimitMib: number; memPercent: number; netIO: string; blockIO: string }> = {};
   containerStats.forEach((v, k) => { statsObj[k] = v; });
 
   return {
     gpus,
     processes,
     containerStats: statsObj,
+    containers: containers.map(c => ({ id: c.id, name: c.name })),
     error,
     refreshIntervalSec,
     history,
@@ -214,22 +247,25 @@ export function buildGpuMonitorData(data: GpuData, refreshIntervalSec = 5, histo
   };
 }
 
-export function getGpuMonitorHtml(data: GpuData, refreshIntervalSec = 5, history: GpuHistoryPoint[] = []): string {
+export function getGpuMonitorHtml(data: GpuData, refreshIntervalSec = 5, history: GpuHistoryPoint[] = [], containers: ContainerFullInfo[] = []): string {
   const { gpus, processes, error } = data;
   const gpuRows = renderGpuCards(gpus);
   const multiGpuSummary = renderMultiGpuSummary(gpus);
   const historyCharts = renderGpuHistoryCharts(history);
-  const hasProcesses = processes.length > 0;
+  const hasContainers = containers.length > 0 || processes.length > 0;
 
   let processHtml = "";
-  if (hasProcesses) {
-    processHtml = `<div class="section-title">\uD83D\uDC33 Container Summary</div><div id="containerSummary">${renderContainerSummary(data)}</div><div class="section-title">\u2699\uFE0F GPU Processes <input type="text" id="procFilter" class="filter-input" placeholder="Filter by name, user, container..." oninput="filterProcs()"></div><div id="processGroups">${renderProcessGroups(data)}</div>`;
+  if (hasContainers) {
+    processHtml = `<div class="section-title">\uD83D\uDC33 Container Summary</div><div id="containerSummary">${renderContainerSummary(data, containers)}</div>`;
+    if (processes.length > 0) {
+      processHtml += `<div class="section-title">\u2699\uFE0F GPU Processes <input type="text" id="procFilter" class="filter-input" placeholder="Filter by name, user, container..." oninput="filterProcs()"></div><div id="processGroups">${renderProcessGroups(data)}</div>`;
+    }
   } else if (!error) {
-    processHtml = `<div class="no-data">No GPU processes.</div>`;
+    processHtml = `<div class="no-data">No containers or GPU processes.</div>`;
   }
 
   // Build initial JSON data for incremental updates
-  const initialData = JSON.stringify(buildGpuMonitorData(data, refreshIntervalSec, history));
+  const initialData = JSON.stringify(buildGpuMonitorData(data, refreshIntervalSec, history, containers));
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 :root{--bg:var(--vscode-editor-background);--fg:var(--vscode-editor-foreground);--border:var(--vscode-panel-border,#333);--green:#4ec9b0;--yellow:#dcdcaa;--red:#f44747;--cyan:#9cdcfe;--dim:var(--vscode-disabledForeground,#666);--card-bg:var(--vscode-sideBar-background,#1e1e1e)}
@@ -279,6 +315,7 @@ td.actions{text-align:right;white-space:nowrap}
 .gpu-idx{width:24px;color:var(--dim)}
 .pname{color:var(--fg);flex:1}
 .user-tag{color:var(--dim);font-size:11px;background:var(--card-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--border)}
+.uptime{color:var(--dim);font-size:11px;margin:0 4px;cursor:default}
 .dim{color:var(--dim)}
 .green{color:var(--green)}.yellow{color:var(--yellow)}.red{color:var(--red)}
 .no-data{color:var(--dim);padding:12px}

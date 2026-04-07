@@ -1,7 +1,17 @@
+export interface DiskInfo {
+  mount: string;
+  device: string;
+  totalGib: number;
+  usedGib: number;
+  freeGib: number;
+  usedPercent: number;
+}
+
 export interface SystemInfo {
   cpuPercent: number;
   memUsedMib: number;
   memTotalMib: number;
+  disks: DiskInfo[];
 }
 
 export interface GpuInfo {
@@ -29,6 +39,8 @@ export interface GpuProcess {
   ramMib: number;
   uid: number;
   username: string;
+  /** Process start time as epoch milliseconds (0 = unknown) */
+  startTime: number;
 }
 
 export interface ContainerStats {

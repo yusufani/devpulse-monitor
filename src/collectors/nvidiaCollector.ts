@@ -84,10 +84,41 @@ function resolveContainerFromProc(
   }
 }
 
+// Boot time cache — read once from /proc/stat
+let _bootTimeMs: number | null = null;
+
+function getBootTimeMs(): number {
+  if (_bootTimeMs !== null) return _bootTimeMs;
+  try {
+    const stat = readProcFile("/proc/stat");
+    const m = stat.match(/^btime\s+(\d+)/m);
+    if (m) {
+      _bootTimeMs = parseInt(m[1]) * 1000;
+      return _bootTimeMs;
+    }
+  } catch { /* ignore */ }
+  _bootTimeMs = 0;
+  return 0;
+}
+
+// Clock ticks per second — read once
+let _clkTck: number | null = null;
+
+function getClkTck(): number {
+  if (_clkTck !== null) return _clkTck;
+  try {
+    const { execSync } = require("child_process");
+    _clkTck = parseInt(execSync("getconf CLK_TCK", { encoding: "utf-8" }).trim()) || 100;
+  } catch {
+    _clkTck = 100; // Linux default
+  }
+  return _clkTck;
+}
+
 function getProcessDetailFromProc(
   pid: number,
-): { cmdline: string; cwd: string; ramMib: number; uid: number } {
-  let cmdline = "", cwd = "", ramMib = 0, uid = -1;
+): { cmdline: string; cwd: string; ramMib: number; uid: number; startTime: number } {
+  let cmdline = "", cwd = "", ramMib = 0, uid = -1, startTime = 0;
 
   const raw = readProcFile(`/proc/${pid}/cmdline`);
   if (raw) cmdline = raw.replace(/\0/g, " ").trim();
@@ -109,7 +140,26 @@ function getProcessDetailFromProc(
     if (uidMatch) uid = parseInt(uidMatch[1]);
   }
 
-  return { cmdline, cwd, ramMib, uid };
+  // Read start time from /proc/[pid]/stat — field 22 (starttime in clock ticks since boot)
+  const statLine = readProcFile(`/proc/${pid}/stat`);
+  if (statLine) {
+    // Format: pid (comm) state ... field22 — comm may contain spaces/parens, skip past closing paren
+    const afterComm = statLine.indexOf(") ");
+    if (afterComm > 0) {
+      const fields = statLine.substring(afterComm + 2).split(" ");
+      // fields[0]=state, fields[1]=ppid, ... fields[19]=starttime (0-indexed from after state)
+      const startTicks = parseInt(fields[19]);
+      if (!isNaN(startTicks)) {
+        const bootMs = getBootTimeMs();
+        const clkTck = getClkTck();
+        if (bootMs > 0) {
+          startTime = bootMs + Math.round((startTicks / clkTck) * 1000);
+        }
+      }
+    }
+  }
+
+  return { cmdline, cwd, ramMib, uid, startTime };
 }
 
 // ── docker-based resolution (fallback for container environments) ──
@@ -307,6 +357,7 @@ export class NvidiaCollector implements IGpuCollector {
             ramMib: detail.ramMib,
             uid: detail.uid,
             username,
+            startTime: detail.startTime,
           } as GpuProcess;
         });
         processes.push(...(await Promise.all(detailPromises)));
@@ -339,6 +390,7 @@ export class NvidiaCollector implements IGpuCollector {
             ramMib: detail?.rssMib || 0,
             uid: detail?.uid ?? -1,
             username,
+            startTime: 0,
           });
         }
       }

@@ -35,6 +35,9 @@
     "container",
     "resource"
   ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
@@ -121,52 +124,52 @@
     "commands": [
       {
         "command": "dockerServices.refresh",
-        "title": "Refresh Container Resources",
+        "title": "DevPulse: Refresh Container Resources",
         "icon": "$(refresh)"
       },
       {
         "command": "gpuMonitor.refresh",
-        "title": "Refresh System Monitor",
+        "title": "DevPulse: Refresh System Monitor",
         "icon": "$(refresh)"
       },
       {
         "command": "gpuMonitor.show",
-        "title": "Open GPU Monitor",
+        "title": "DevPulse: Open GPU Monitor",
         "icon": "$(window)"
       },
       {
         "command": "gpuMonitor.killProcess",
-        "title": "Kill Process",
+        "title": "DevPulse: Kill Process",
         "icon": "$(close)"
       },
       {
         "command": "gpuMonitor.stopContainer",
-        "title": "Stop Container",
+        "title": "DevPulse: Stop Container",
         "icon": "$(debug-stop)"
       },
       {
         "command": "gpuMonitor.killContainer",
-        "title": "Force Kill Container",
+        "title": "DevPulse: Force Kill Container",
         "icon": "$(trash)"
       },
       {
         "command": "gpuMonitor.restartContainer",
-        "title": "Restart Container",
+        "title": "DevPulse: Restart Container",
         "icon": "$(debug-restart)"
       },
       {
         "command": "gpuMonitor.showContainerLogs",
-        "title": "Show Container Logs",
+        "title": "DevPulse: Show Container Logs",
         "icon": "$(output)"
       },
       {
         "command": "gpuMonitor.execContainer",
-        "title": "Exec into Container",
+        "title": "DevPulse: Exec into Container",
         "icon": "$(terminal)"
       },
       {
         "command": "gpuMonitor.attachContainer",
-        "title": "Attach to Container",
+        "title": "DevPulse: Attach to Container",
         "icon": "$(plug)"
       },
       {
@@ -179,29 +182,29 @@
       },
       {
         "command": "gpuMonitor.copyContainerId",
-        "title": "Copy Container ID"
+        "title": "DevPulse: Copy Container ID"
       },
       {
         "command": "gpuMonitor.copyContainerName",
-        "title": "Copy Container Name"
+        "title": "DevPulse: Copy Container Name"
       },
       {
         "command": "gpuMonitor.copyContainerImage",
-        "title": "Copy Container Image"
+        "title": "DevPulse: Copy Container Image"
       },
       {
         "command": "gpuMonitor.openPort",
-        "title": "Open Port in Browser",
+        "title": "DevPulse: Open Port in Browser",
         "icon": "$(globe)"
       },
       {
         "command": "gpuMonitor.showEnvVars",
-        "title": "Show Environment Variables",
+        "title": "DevPulse: Show Environment Variables",
         "icon": "$(symbol-variable)"
       },
       {
         "command": "gpuMonitor.showVolumes",
-        "title": "Show Volume Mounts",
+        "title": "DevPulse: Show Volume Mounts",
         "icon": "$(folder-library)"
       },
       {
