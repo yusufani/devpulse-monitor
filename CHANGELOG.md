@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.10.0](https://github.com/yusufani/devpulse-monitor/compare/v1.9.0...v1.10.0) (2026-04-07)
+
+
+### Features
+
+* add disk monitoring and UI enhancements for resource display ([842b353](https://github.com/yusufani/devpulse-monitor/commit/842b3534fcfc84158374d374e7dbdeab9e828e30))
+
+
+### Bug Fixes
+
+* remove redundant execSync import in getClkTck function ([8e2d16d](https://github.com/yusufani/devpulse-monitor/commit/8e2d16d0f5e0fa76d87d2c5cbd36bd70bf10e41d))
+
 ## [1.9.0](https://github.com/yusufani/devpulse-monitor/compare/v1.8.0...v1.9.0) (2026-04-03)
 
 
