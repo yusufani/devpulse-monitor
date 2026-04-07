@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/yusufani/devpulse-monitor/compare/v1.10.0...v1.11.0) (2026-04-07)
+
+
+### Features
+
+* enhance GPU status bar with segmented VRAM usage and improved tooltip display ([5a04924](https://github.com/yusufani/devpulse-monitor/commit/5a0492489eceeaae3092133331ca26243682fc25))
+
 ## [1.10.0](https://github.com/yusufani/devpulse-monitor/compare/v1.9.0...v1.10.0) (2026-04-07)
 
 
