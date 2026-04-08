@@ -5,7 +5,8 @@ import { StatusBarController } from "./views/statusBar";
 import { GpuSidebarProvider } from "./views/gpuSidebar";
 import { ContainerTableViewProvider } from "./views/containerTableView";
 import { GpuMonitorPanel } from "./views/webview/gpuMonitorPanel";
-import { ProcessItem, ContainerItem } from "./views/treeItems";
+import { ProcessItem, ProcessDetailItem, ContainerItem } from "./views/treeItems";
+import { fmtMem, fmtUptime, fmtStartDate } from "./utils/format";
 import { getOutputChannel, log } from "./utils/logger";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -189,6 +190,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const terminal = vscode.window.createTerminal(`Attach: ${containerName}`);
       terminal.sendText(`docker attach ${containerId}`);
       terminal.show();
+    }),
+  );
+
+  // ── Copy process info ────────────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.copyProcessInfo", async (item: ProcessItem) => {
+      if (!(item instanceof ProcessItem)) return;
+      const p = item.proc;
+      const parts = [p.processName, `PID ${p.pid}`, `VRAM ${fmtMem(p.memMib)}`, `G${p.gpuIndex}`];
+      if (p.ramMib > 0) parts.push(`RAM ${fmtMem(p.ramMib)}`);
+      parts.push(`User: ${p.username}`);
+      if (p.cwd && p.cwd !== "?") parts.push(`CWD: ${p.cwd}`);
+      const uptime = fmtUptime(p.startTime);
+      if (uptime) parts.push(`Uptime: ${uptime}`);
+      const startDate = fmtStartDate(p.startTime);
+      if (startDate) parts.push(`Started: ${startDate}`);
+      if (p.cmdline) parts.push(`CMD: ${p.cmdline}`);
+      const text = parts.join(" | ");
+      await vscode.env.clipboard.writeText(text);
+      vscode.window.showInformationMessage("Copied process info");
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.copyDetailText", async (item: ProcessDetailItem) => {
+      if (!(item instanceof ProcessDetailItem)) return;
+      const text = typeof item.label === "string" ? item.label : "";
+      await vscode.env.clipboard.writeText(text);
+      vscode.window.showInformationMessage("Copied");
     }),
   );
 

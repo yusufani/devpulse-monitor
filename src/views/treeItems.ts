@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { SystemInfo, GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo } from "../types";
-import { fmtMem } from "../utils/format";
+import { fmtMem, fmtUptime, fmtStartDate } from "../utils/format";
 
 // ── User Color Palette ───────────────────────────────────────────
 
@@ -262,10 +262,16 @@ export class ProcessItem extends vscode.TreeItem {
     super(proc.processName, vscode.TreeItemCollapsibleState.Collapsed);
     const parts = [`PID ${proc.pid}`, `VRAM ${fmtMem(proc.memMib)}`, `G${proc.gpuIndex}`];
     if (proc.ramMib > 0) parts.push(`RAM ${fmtMem(proc.ramMib)}`);
+    const uptime = fmtUptime(proc.startTime);
+    if (uptime) parts.push(uptime);
     this.description = parts.join(" · ");
     this.iconPath = new vscode.ThemeIcon("symbol-method");
     this.contextValue = "gpuProcess";
-    this.tooltip = `${proc.processName}\n${parts.join("\n")}\nUser: ${proc.username}`;
+    const tooltipLines = [proc.processName, ...parts, `User: ${proc.username}`];
+    const startDate = fmtStartDate(proc.startTime);
+    if (startDate) tooltipLines.push(`Started: ${startDate}`);
+    if (proc.cwd && proc.cwd !== "?") tooltipLines.push(`CWD: ${proc.cwd}`);
+    this.tooltip = tooltipLines.join("\n");
   }
 }
 
@@ -273,6 +279,7 @@ export class ProcessDetailItem extends vscode.TreeItem {
   constructor(label: string, icon: string) {
     super(label, vscode.TreeItemCollapsibleState.None);
     this.iconPath = new vscode.ThemeIcon(icon);
+    this.contextValue = "gpuProcessDetail";
   }
 }
 

@@ -1,28 +1,7 @@
 import { GpuData, GpuInfo, GpuProcess, ContainerFullInfo } from "../../types";
-import { fmtMem } from "../../utils/format";
+import { fmtMem, fmtUptime, fmtStartDate } from "../../utils/format";
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-function fmtUptime(startTime: number): string {
-  if (!startTime) return "";
-  const elapsed = Date.now() - startTime;
-  if (elapsed < 0) return "";
-  const sec = Math.floor(elapsed / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ${min % 60}m`;
-  const days = Math.floor(hr / 24);
-  return `${days}d ${hr % 24}h`;
-}
-
-function fmtStartDate(startTime: number): string {
-  if (!startTime) return "";
-  const d = new Date(startTime);
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 function bar(used: number, total: number, id?: string): string {
   const pct = total > 0 ? (used / total) * 100 : 0;
@@ -204,19 +183,24 @@ function renderProcessGroups(data: GpuData): string {
       act += `<button class="btn btn-warn" onclick="stopContainer('${cid}','${esc(cn)}')">Stop</button>`;
       act += `<button class="btn btn-danger" onclick="killContainerAction('${cid}','${esc(cn)}')">Kill</button>`;
     }
-    html += `<div class="group-header"><span class="group-name">${esc(cn)}</span><span class="group-meta">${procs.length} procs \u00B7 VRAM ${fmtMem(tv)} \u00B7 RAM ${fmtMem(tr)} \u00B7 GPU ${gu}${cpuStr}</span>${act}</div>`;
+    const groupText = `${cn} | ${procs.length} procs | VRAM ${fmtMem(tv)} | RAM ${fmtMem(tr)} | GPU ${gu}${cs ? ` | CPU ${cs.cpuPercent.toFixed(1)}%` : ""}`;
+    html += `<div class="group-header"><span class="group-name">${esc(cn)}</span><span class="group-meta">${procs.length} procs \u00B7 VRAM ${fmtMem(tv)} \u00B7 RAM ${fmtMem(tr)} \u00B7 GPU ${gu}${cpuStr}</span><button class="btn-copy" data-copy="${esc(groupText)}" title="Copy">copy</button>${act}</div>`;
     for (let i = 0; i < procs.length; i++) {
       const p = procs[i];
       const last = i === procs.length - 1;
       const br = last ? "\u2514\u2500" : "\u251C\u2500";
       const co = last ? "  " : "\u2502 ";
-      const cmd = p.cmdline.length > 120 ? p.cmdline.substring(0, 117) + "..." : p.cmdline;
-      const cw = p.cwd.length > 40 ? "..." + p.cwd.substring(p.cwd.length - 37) : p.cwd;
+      const cmd = p.cmdline;
+      const cw = p.cwd;
+      const cwdShort = cw && cw !== "?" ? cw.split("/").filter(Boolean).pop() || cw : "";
+      const cwdTag = cwdShort ? `<span class="cwd-tag" title="${esc(cw)}">${esc(cwdShort)}</span>` : "";
       const upStr = fmtUptime(p.startTime);
       const startStr = fmtStartDate(p.startTime);
       const timeInfo = upStr ? `<span class="uptime" title="Started: ${startStr}">\u23F1 ${upStr}</span>` : "";
-      html += `<div class="proc-row" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree">${br}</span><span class="pid">${p.pid}</span><span class="mem ${memClass(p.memMib)}">${fmtMem(p.memMib)}</span><span class="ram">${fmtMem(p.ramMib)}</span><span class="gpu-idx">G${p.gpuIndex}</span><span class="pname">${esc(p.processName)}</span>${timeInfo}<span class="user-tag">${esc(p.username)}</span><button class="btn-kill" onclick="killProc(${p.pid},'${esc(p.processName)}',${p.memMib})">\u00D7</button></div>`;
-      html += `<div class="proc-detail" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree dim">${co}</span><span class="dim">\u2514 ${esc(cw)}$ ${esc(cmd)}</span></div>`;
+      const rowText = `PID ${p.pid} | VRAM ${fmtMem(p.memMib)} | RAM ${fmtMem(p.ramMib)} | G${p.gpuIndex} | ${p.processName} | ${p.username}${cwdShort ? ` | ${cw}` : ""}${upStr ? ` | uptime: ${upStr}` : ""}`;
+      const detailText = `${cw}$ ${cmd}`;
+      html += `<div class="proc-row" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree">${br}</span><span class="pid">${p.pid}</span><span class="mem ${memClass(p.memMib)}">${fmtMem(p.memMib)}</span><span class="ram">${fmtMem(p.ramMib)}</span><span class="gpu-idx">G${p.gpuIndex}</span><span class="pname">${esc(p.processName)}</span>${cwdTag}${timeInfo}<span class="user-tag">${esc(p.username)}</span><button class="btn-copy" data-copy="${esc(rowText)}" title="Copy">copy</button><button class="btn-kill" onclick="killProc(${p.pid},'${esc(p.processName)}',${p.memMib})">\u00D7</button></div>`;
+      html += `<div class="proc-detail" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree dim">${co}</span><span class="dim">\u2514 ${esc(cw)}$ ${esc(cmd)}</span><button class="btn-copy" data-copy="${esc(detailText)}" title="Copy">copy</button></div>`;
     }
   }
   return html;
@@ -271,7 +255,7 @@ export function getGpuMonitorHtml(data: GpuData, refreshIntervalSec = 5, history
 :root{--bg:var(--vscode-editor-background);--fg:var(--vscode-editor-foreground);--border:var(--vscode-panel-border,#333);--green:#4ec9b0;--yellow:#dcdcaa;--red:#f44747;--cyan:#9cdcfe;--dim:var(--vscode-disabledForeground,#666);--card-bg:var(--vscode-sideBar-background,#1e1e1e)}
 body{font-family:var(--vscode-editor-font-family,monospace);font-size:13px;color:var(--fg);background:var(--bg);padding:12px;margin:0}
 .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
-.header h2{margin:0;color:var(--cyan);font-size:15px}
+.header h2{margin:0;color:var(--cyan);font-size:15px}.version{font-size:11px;color:var(--dim);font-weight:normal}
 .header .meta{color:var(--dim);font-size:12px}
 .refresh-btn{background:none;border:1px solid var(--border);color:var(--fg);padding:4px 12px;cursor:pointer;border-radius:3px;font-size:12px}
 .refresh-btn:hover{background:var(--border)}
@@ -307,7 +291,7 @@ td.actions{text-align:right;white-space:nowrap}
 .group-name{color:var(--cyan);font-weight:bold}
 .group-meta{color:var(--dim);font-size:12px}
 .proc-row{display:flex;align-items:center;gap:8px;padding:2px 0 2px 16px;font-family:monospace}
-.proc-detail{padding:0 0 4px 16px;font-family:monospace;font-size:11px}
+.proc-detail{padding:0 0 4px 16px;font-family:monospace;font-size:11px;word-break:break-all;white-space:normal}
 .tree{color:var(--dim);width:20px;flex-shrink:0}
 .pid{color:var(--dim);width:70px;text-align:right}
 .mem{width:70px;text-align:right;font-weight:bold}
@@ -324,12 +308,14 @@ td.actions{text-align:right;white-space:nowrap}
 .btn-warn{border-color:var(--yellow);color:var(--yellow)}.btn-warn:hover{background:var(--yellow);color:#000}
 .btn-danger{border-color:var(--red);color:var(--red)}.btn-danger:hover{background:var(--red);color:#fff}
 .btn-kill{background:none;border:none;color:var(--red);cursor:pointer;font-size:16px;padding:0 4px;opacity:.5}.btn-kill:hover{opacity:1}
+.btn-copy{background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:0 4px;opacity:.4;transition:opacity .2s}.btn-copy:hover{opacity:1}
+.cwd-tag{color:var(--dim);font-size:11px;background:var(--card-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--border);white-space:nowrap;cursor:default}
 .hidden{display:none!important}
 @keyframes valPulse{0%{text-shadow:0 0 4px var(--cyan)}100%{text-shadow:none}}
 .val-changed{animation:valPulse .6s ease}
 </style></head><body>
 <div class="header">
-  <h2>GPU / Docker VRAM Monitor</h2>
+  <h2>GPU / Docker VRAM Monitor <span class="version">v${require("../../../package.json").version}</span></h2>
   <div>
     <span class="meta" id="metaInfo">${new Date().toLocaleTimeString()} \u00B7 ${processes.length} procs \u00B7 auto-refresh ${refreshIntervalSec}s</span>
     <button class="refresh-btn" onclick="vscode.postMessage({command:'refresh'})">\u21BB Refresh</button>
@@ -350,6 +336,7 @@ function restartContainer(c,n){vscode.postMessage({command:'restartContainer',co
 function execContainer(c,n){vscode.postMessage({command:'exec',containerId:c,name:n})}
 function showLogs(c,n){vscode.postMessage({command:'logs',containerId:c,name:n})}
 function attachContainer(c,n){vscode.postMessage({command:'attach',containerId:c,name:n})}
+document.addEventListener('click',function(e){var btn=e.target.closest('.btn-copy');if(!btn)return;var text=btn.getAttribute('data-copy');if(!text)return;vscode.postMessage({command:'copyText',text:text});btn.textContent='\\u2713';setTimeout(function(){btn.textContent='copy'},1000)});
 function filterProcs(){
   const q=(document.getElementById('procFilter')||{}).value||'';
   const ql=q.toLowerCase();

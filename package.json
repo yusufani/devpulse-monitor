@@ -3,7 +3,7 @@
   "displayName": "DevPulse Monitor - CPU RAM GPU Docker Monitor",
   "description": "Real-time GPU, CPU, RAM monitoring with container resource tracking for VS Code",
   "icon": "images/icon.png",
-  "version": "1.10.0",
+  "version": "1.12.7",
   "publisher": "ANISOFT",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
@@ -77,14 +77,14 @@
         },
         "dockerMonitor.vramAlertThreshold": {
           "type": "number",
-          "default": 90,
+          "default": 95,
           "minimum": 50,
           "maximum": 99,
-          "description": "VRAM usage % that triggers a critical alert (default: 90)"
+          "description": "VRAM usage % that triggers a critical alert (default: 95)"
         },
         "dockerMonitor.idleGpuDetection": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "Enable idle GPU detection alerts (VRAM allocated but 0% utilization)"
         },
         "dockerMonitor.leakDetection": {
@@ -210,6 +210,16 @@
       {
         "command": "gpuMonitor.exportHistory",
         "title": "DevPulse: Export GPU History (CSV)"
+      },
+      {
+        "command": "gpuMonitor.copyProcessInfo",
+        "title": "Copy Process Info",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "gpuMonitor.copyDetailText",
+        "title": "Copy",
+        "icon": "$(copy)"
       }
     ],
     "menus": {
@@ -232,8 +242,18 @@
       ],
       "view/item/context": [
         {
+          "command": "gpuMonitor.copyProcessInfo",
+          "when": "view == gpuMonitor && viewItem == gpuProcess",
+          "group": "inline"
+        },
+        {
           "command": "gpuMonitor.killProcess",
           "when": "view == gpuMonitor && viewItem == gpuProcess",
+          "group": "inline"
+        },
+        {
+          "command": "gpuMonitor.copyDetailText",
+          "when": "view == gpuMonitor && viewItem == gpuProcessDetail",
           "group": "inline"
         },
         {

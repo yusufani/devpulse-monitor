@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { MonitorService } from "../services/monitorService";
 import { GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo, SystemInfo } from "../types";
-import { fmtMem } from "../utils/format";
+import { fmtMem, fmtUptime, fmtStartDate } from "../utils/format";
 import {
   SidebarItem,
   SystemItem,
@@ -198,11 +198,16 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
     const p = el.proc;
     const items: SidebarItem[] = [];
     if (p.cmdline && p.cmdline !== p.processName) {
-      const cmd = p.cmdline.length > 120 ? p.cmdline.substring(0, 117) + "..." : p.cmdline;
-      items.push(new ProcessDetailItem(cmd, "terminal"));
+      items.push(new ProcessDetailItem(p.cmdline, "terminal"));
     }
     if (p.cwd && p.cwd !== "?") {
       items.push(new ProcessDetailItem(p.cwd, "folder"));
+    }
+    const startDate = fmtStartDate(p.startTime);
+    const uptime = fmtUptime(p.startTime);
+    if (startDate) {
+      const timeLabel = uptime ? `${startDate} (${uptime})` : startDate;
+      items.push(new ProcessDetailItem(timeLabel, "clock"));
     }
     return items;
   }

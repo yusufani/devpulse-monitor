@@ -124,7 +124,6 @@ function getProcessDetailFromProc(
   if (raw) cmdline = raw.replace(/\0/g, " ").trim();
 
   try {
-    // cwd via readlink is sync-safe but we need exec for symlink
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { readlinkSync } = require("fs");
     cwd = readlinkSync(`/proc/${pid}/cwd`);
@@ -133,6 +132,32 @@ function getProcessDetailFromProc(
   }
 
   const status = readProcFile(`/proc/${pid}/status`);
+
+  // If cmdline looks like a renamed process (e.g. "VLLM::EngineCore"), try parent process
+  // Processes that use prctl(PR_SET_NAME) overwrite cmdline, losing the real command
+  if (status) {
+    const ppidMatch = status.match(/PPid:\s+(\d+)/);
+    if (ppidMatch) {
+      const ppid = parseInt(ppidMatch[1]);
+      const cmdlineLooksRenamed = !cmdline || !cmdline.includes("/") && !cmdline.includes(" ");
+      if (cmdlineLooksRenamed && ppid > 1) {
+        const parentRaw = readProcFile(`/proc/${ppid}/cmdline`);
+        if (parentRaw) {
+          const parentCmdline = parentRaw.replace(/\0/g, " ").trim();
+          if (parentCmdline && parentCmdline.includes("/")) {
+            cmdline = `[parent] ${parentCmdline}`;
+          }
+        }
+        if (!cwd) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { readlinkSync } = require("fs");
+            cwd = readlinkSync(`/proc/${ppid}/cwd`);
+          } catch { /* no access */ }
+        }
+      }
+    }
+  }
   if (status) {
     const ramMatch = status.match(/VmRSS:\s+(\d+)\s+kB/);
     if (ramMatch) ramMib = Math.round(parseInt(ramMatch[1]) / 1024);
@@ -160,6 +185,32 @@ function getProcessDetailFromProc(
   }
 
   return { cmdline, cwd, ramMib, uid, startTime };
+}
+
+// Resolve real cwd for processes inside containers using NSpid + docker exec
+async function resolveContainerCwd(
+  procs: GpuProcess[],
+): Promise<void> {
+  const docker = (await findBinary("docker")) || "docker";
+  const promises = procs
+    .filter((p) => (!p.cwd || p.cwd === "?") && p.containerId)
+    .map(async (p) => {
+      try {
+        // Read NSpid (namespace PID) from /proc status — last value is the container-internal PID
+        // Format: "NSpid:\t<host_pid>" or "NSpid:\t<host_pid>\t<ns_pid>"
+        const status = readProcFile(`/proc/${p.pid}/status`);
+        const nspidMatch = status?.match(/NSpid:\s+(.+)$/m);
+        if (!nspidMatch) return;
+        const nspidParts = nspidMatch[1].trim().split(/\s+/);
+        const nspid = nspidParts[nspidParts.length - 1];
+        const { stdout } = await execCommand(
+          `${docker} exec ${p.containerId} readlink /proc/${nspid}/cwd`,
+        );
+        const cwd = stdout.trim();
+        if (cwd) p.cwd = cwd;
+      } catch { /* ignore — container may not allow exec */ }
+    });
+  await Promise.all(promises);
 }
 
 // ── docker-based resolution (fallback for container environments) ──
@@ -360,7 +411,12 @@ export class NvidiaCollector implements IGpuCollector {
             startTime: detail.startTime,
           } as GpuProcess;
         });
-        processes.push(...(await Promise.all(detailPromises)));
+        const resolved = await Promise.all(detailPromises);
+
+        // For processes with unknown cwd inside containers, resolve via docker exec + NSpid
+        await resolveContainerCwd(resolved);
+
+        processes.push(...resolved);
       } else {
         // Fallback: use docker top to build PID→container map with rich detail
         const docker = (await findBinary("docker")) || "docker";

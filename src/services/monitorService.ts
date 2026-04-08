@@ -208,8 +208,8 @@ export class MonitorService implements vscode.Disposable {
             vscode.commands.executeCommand("gpuMonitor.show");
           }
         });
-      } else if (pct <= Math.max(50, threshold - 5)) {
-        // Reset alert when usage drops back
+      } else if (pct <= threshold - 10) {
+        // Reset alert when usage drops significantly below threshold
         this.alertFired.delete(gpu.index);
       }
     }
@@ -305,7 +305,7 @@ export class MonitorService implements vscode.Disposable {
     for (const gpu of this.gpuData.gpus) {
       if (this.leakAlertFired.has(gpu.index)) continue;
       const pct = gpu.memTotal > 0 ? (gpu.memUsed / gpu.memTotal) * 100 : 0;
-      if (pct < 50) continue; // only care if already above 50%
+      if (pct < 80) continue; // only care if already above 80%
 
       const vals = recent
         .map((h) => h.gpus.find((g) => g.index === gpu.index)?.memUsed)
@@ -321,7 +321,7 @@ export class MonitorService implements vscode.Disposable {
       const growth = vals[vals.length - 1] - vals[0];
       const growthPct = gpu.memTotal > 0 ? (growth / gpu.memTotal) * 100 : 0;
 
-      if (monotonic && growthPct >= 5) {
+      if (monotonic && growthPct >= 10) {
         this.leakAlertFired.add(gpu.index);
         vscode.window.showWarningMessage(
           `GPU ${gpu.index}: VRAM growing steadily (+${fmtMem(growth)} in last ${recent.length} samples, now ${Math.round(pct)}%) — possible memory leak`,
