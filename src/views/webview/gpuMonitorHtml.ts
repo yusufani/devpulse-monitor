@@ -228,6 +228,8 @@ export function buildGpuMonitorData(data: GpuData, refreshIntervalSec = 5, histo
     refreshIntervalSec,
     history,
     timestamp: new Date().toLocaleTimeString(),
+    processGroupsHtml: processes.length > 0 ? renderProcessGroups(data) : "",
+    containerSummaryHtml: renderContainerSummary(data, containers),
   };
 }
 
@@ -448,6 +450,15 @@ window.addEventListener('message', function(event) {
       if (tp) tp.setAttribute('d', makePath(function(p){return Math.min(p.temp,100)}));
     }
   }
+
+  // Update process groups and container summary HTML
+  var pg = document.getElementById('processGroups');
+  if (pg && msg.processGroupsHtml !== undefined) {
+    pg.innerHTML = msg.processGroupsHtml;
+    filterProcs();
+  }
+  var cs = document.getElementById('containerSummary');
+  if (cs && msg.containerSummaryHtml !== undefined) cs.innerHTML = msg.containerSummaryHtml;
 });
 
 // Store initial data

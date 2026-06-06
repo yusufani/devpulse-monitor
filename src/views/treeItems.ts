@@ -264,6 +264,8 @@ export class ProcessItem extends vscode.TreeItem {
     if (proc.ramMib > 0) parts.push(`RAM ${fmtMem(proc.ramMib)}`);
     const uptime = fmtUptime(proc.startTime);
     if (uptime) parts.push(uptime);
+    const cwdFolder = proc.cwd && proc.cwd !== "?" ? proc.cwd.split("/").filter(Boolean).pop() : "";
+    if (cwdFolder) parts.push(`📁 ${cwdFolder}`);
     this.description = parts.join(" · ");
     this.iconPath = new vscode.ThemeIcon("symbol-method");
     this.contextValue = "gpuProcess";

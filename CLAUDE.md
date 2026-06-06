@@ -13,18 +13,21 @@ npm run compile
 # 2. Package VSIX (bump version in package.json first if needed)
 npx vsce package --no-dependencies
 
-# 3. Install on remote VS Code Server Insiders
-/tier01/data/labhome/yani/.vscode-server-insiders/cli/servers/Insiders-53fb310ae033b6fc8f6a3599a168028cb08ad37d/server/bin/code-server-insiders --install-extension devpulse-monitor-*.vsix
+# 3. Install on the running VS Code Server (Stable — see note below)
+VSCODE_AGENT_FOLDER=/tier01/data/labhome/yani/vscode-server-fix/.vscode-server \
+  /tier01/data/labhome/yani/vscode-server-fix/.vscode-server/cli/servers/Stable-8761a5560cfd65fdd19ce7e2bd18dab5c0a4d84e/server/bin/code-server --install-extension devpulse-monitor-*.vsix
 
 # 4. User reloads window: Ctrl+Shift+P -> Developer: Reload Window
 ```
+
+**Important — which server is actually running:** The user runs the **Stable** server at `vscode-server-fix/.vscode-server`, launched with `VSCODE_AGENT_FOLDER` pointing there. The `code-server` CLI defaults its extensions dir to `~/.vscode-server/extensions` (empty / root-owned here), so you MUST pass `VSCODE_AGENT_FOLDER=.../vscode-server-fix/.vscode-server` or the install fails with "Unable to resolve nonexistent file '.../.vscode-server/extensions'". The old Insiders path (`.vscode-server-insiders/.../code-server-insiders`) installs to a server that is NOT running — extensions land there but the user never sees them. To find the live server + folder: `pgrep -af extensionHost` and read its `/proc/<pid>/environ` for `VSCODE_AGENT_FOLDER`.
 
 **Important:** There is already an installed version. Always bump `version` in `package.json` higher than the current installed version, otherwise the old version will be used.
 
 ## One-liner (compile + package + install)
 
 ```bash
-npm run compile && npx vsce package --no-dependencies && /tier01/data/labhome/yani/.vscode-server-insiders/cli/servers/Insiders-53fb310ae033b6fc8f6a3599a168028cb08ad37d/server/bin/code-server-insiders --install-extension devpulse-monitor-*.vsix
+npm run compile && npx vsce package --no-dependencies && VSCODE_AGENT_FOLDER=/tier01/data/labhome/yani/vscode-server-fix/.vscode-server /tier01/data/labhome/yani/vscode-server-fix/.vscode-server/cli/servers/Stable-8761a5560cfd65fdd19ce7e2bd18dab5c0a4d84e/server/bin/code-server --install-extension devpulse-monitor-*.vsix
 ```
 
 ## Architecture
