@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.0](https://github.com/yusufani/devpulse-monitor/compare/v1.11.0...v1.12.0) (2026-06-06)
+
+
+### Features
+
+* add build and test workflow documentation, update version, enhance GPU monitoring features, and improve clipboard functionality ([fa425f2](https://github.com/yusufani/devpulse-monitor/commit/fa425f2477477c8b34495641567656b21c6d3871))
+* update installation instructions for VS Code Server and bump version to 1.13.0; enhance process and container summary display ([21272fc](https://github.com/yusufani/devpulse-monitor/commit/21272fc26e5231c5682db87abb45c37b8a546bc2))
+
 ## [1.11.0](https://github.com/yusufani/devpulse-monitor/compare/v1.10.0...v1.11.0) (2026-04-07)
 
 
