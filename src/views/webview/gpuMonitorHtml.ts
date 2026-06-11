@@ -1,5 +1,8 @@
 import { GpuData, GpuInfo, GpuProcess, ContainerFullInfo } from "../../types";
 import { fmtMem, fmtUptime, fmtStartDate } from "../../utils/format";
+// package.json is outside rootDir (src), so it can't be imported; load via require.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const pkg = require("../../../package.json");
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -317,7 +320,7 @@ td.actions{text-align:right;white-space:nowrap}
 .val-changed{animation:valPulse .6s ease}
 </style></head><body>
 <div class="header">
-  <h2>GPU / Docker VRAM Monitor <span class="version">v${require("../../../package.json").version}</span></h2>
+  <h2>GPU / Docker VRAM Monitor <span class="version">v${pkg.version}</span></h2>
   <div>
     <span class="meta" id="metaInfo">${new Date().toLocaleTimeString()} \u00B7 ${processes.length} procs \u00B7 auto-refresh ${refreshIntervalSec}s</span>
     <button class="refresh-btn" onclick="vscode.postMessage({command:'refresh'})">\u21BB Refresh</button>
