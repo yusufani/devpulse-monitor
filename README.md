@@ -6,10 +6,11 @@
 [![GitHub Release](https://img.shields.io/github/v/release/yusufani/devpulse-monitor)](https://github.com/yusufani/devpulse-monitor/releases)
 [![License](https://img.shields.io/badge/license-Source%20Available-blue)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-red?logo=github)](https://github.com/sponsors/yusufani)
+[![PayPal](https://img.shields.io/badge/PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/yusufani)
 
 Real-time system and container resource monitoring — GPU, CPU, RAM, VRAM — right in your VS Code sidebar.
 
-**If you find DevPulse useful, please consider [sponsoring the project](https://github.com/sponsors/yusufani) to support development!**
+**If you find DevPulse useful, please consider supporting development via [GitHub Sponsors](https://github.com/sponsors/yusufani) or [PayPal](https://paypal.me/yusufani)!**
 
 ## Why DevPulse?
 

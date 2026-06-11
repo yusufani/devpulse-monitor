@@ -54,6 +54,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.support", async () => {
+      const options = [
+        { label: "$(heart) GitHub Sponsors", url: "https://github.com/sponsors/yusufani" },
+        { label: "$(credit-card) PayPal", url: "https://paypal.me/yusufani" },
+      ];
+      const picked = await vscode.window.showQuickPick(options, {
+        placeHolder: "Support DevPulse — thank you! ❤",
+      });
+      if (picked) {
+        await vscode.env.openExternal(vscode.Uri.parse(picked.url));
+      }
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("gpuMonitor.refresh", () => {
       monitor.refresh();
     }),

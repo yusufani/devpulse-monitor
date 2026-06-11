@@ -141,6 +141,11 @@
         "icon": "$(window)"
       },
       {
+        "command": "gpuMonitor.support",
+        "title": "DevPulse: Support the Project ❤",
+        "icon": "$(heart)"
+      },
+      {
         "command": "gpuMonitor.killProcess",
         "title": "DevPulse: Kill Process",
         "icon": "$(close)"
@@ -241,6 +246,11 @@
           "command": "gpuMonitor.refresh",
           "when": "view == gpuMonitor",
           "group": "navigation"
+        },
+        {
+          "command": "gpuMonitor.support",
+          "when": "view == gpuMonitor",
+          "group": "navigation@99"
         }
       ],
       "view/item/context": [
