@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.13.0](https://github.com/yusufani/devpulse-monitor/compare/v1.12.0...v1.13.0) (2026-06-11)
+
+
+### Features
+
+* bump version to 1.14.0 and enhance GPU utilization display in status bar ([2b7d50b](https://github.com/yusufani/devpulse-monitor/commit/2b7d50ba66b4cde67023a77861e378fac49f98e1))
+
+
+### Bug Fixes
+
+* update package.json import to use a variable for version display ([e903980](https://github.com/yusufani/devpulse-monitor/commit/e903980b0b7867424a906c9ca9c4160de171f723))
+
 ## [1.12.0](https://github.com/yusufani/devpulse-monitor/compare/v1.11.0...v1.12.0) (2026-06-06)
 
 
