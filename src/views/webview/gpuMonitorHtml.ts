@@ -177,6 +177,8 @@ function renderProcessGroups(data: GpuData): string {
     const tv = procs.reduce((s, p) => s + p.memMib, 0);
     const tr = procs.reduce((s, p) => s + p.ramMib, 0);
     const gu = [...new Set(procs.map((p) => p.gpuIndex))].sort().join(",");
+    const guSum = procs.reduce((s, p) => s + (p.gpuUtil || 0), 0);
+    const guStr = guSum > 0 ? ` · SM ${guSum}%` : "";
     const cid = cnameToId[cn] || "";
     const cs = cid ? containerStats.get(cid) : undefined;
     const cpuStr = cs ? ` \u00B7 CPU ${cs.cpuPercent.toFixed(1)}%` : "";
@@ -186,8 +188,8 @@ function renderProcessGroups(data: GpuData): string {
       act += `<button class="btn btn-warn" onclick="stopContainer('${cid}','${esc(cn)}')">Stop</button>`;
       act += `<button class="btn btn-danger" onclick="killContainerAction('${cid}','${esc(cn)}')">Kill</button>`;
     }
-    const groupText = `${cn} | ${procs.length} procs | VRAM ${fmtMem(tv)} | RAM ${fmtMem(tr)} | GPU ${gu}${cs ? ` | CPU ${cs.cpuPercent.toFixed(1)}%` : ""}`;
-    html += `<div class="group-header"><span class="group-name">${esc(cn)}</span><span class="group-meta">${procs.length} procs \u00B7 VRAM ${fmtMem(tv)} \u00B7 RAM ${fmtMem(tr)} \u00B7 GPU ${gu}${cpuStr}</span><button class="btn-copy" data-copy="${esc(groupText)}" title="Copy">copy</button>${act}</div>`;
+    const groupText = `${cn} | ${procs.length} procs | VRAM ${fmtMem(tv)} | RAM ${fmtMem(tr)} | GPU ${gu}${guSum > 0 ? ` | SM ${guSum}%` : ""}${cs ? ` | CPU ${cs.cpuPercent.toFixed(1)}%` : ""}`;
+    html += `<div class="group-header"><span class="group-name">${esc(cn)}</span><span class="group-meta">${procs.length} procs \u00B7 VRAM ${fmtMem(tv)} \u00B7 RAM ${fmtMem(tr)} \u00B7 GPU ${gu}${guStr}${cpuStr}</span><button class="btn-copy" data-copy="${esc(groupText)}" title="Copy">copy</button>${act}</div>`;
     for (let i = 0; i < procs.length; i++) {
       const p = procs[i];
       const last = i === procs.length - 1;
@@ -200,9 +202,10 @@ function renderProcessGroups(data: GpuData): string {
       const upStr = fmtUptime(p.startTime);
       const startStr = fmtStartDate(p.startTime);
       const timeInfo = upStr ? `<span class="uptime" title="Started: ${startStr}">\u23F1 ${upStr}</span>` : "";
-      const rowText = `PID ${p.pid} | VRAM ${fmtMem(p.memMib)} | RAM ${fmtMem(p.ramMib)} | G${p.gpuIndex} | ${p.processName} | ${p.username}${cwdShort ? ` | ${cw}` : ""}${upStr ? ` | uptime: ${upStr}` : ""}`;
+      const smCls = p.gpuUtil > 50 ? "red" : p.gpuUtil > 20 ? "yellow" : "dim";
+      const rowText = `PID ${p.pid} | VRAM ${fmtMem(p.memMib)} | RAM ${fmtMem(p.ramMib)} | G${p.gpuIndex} | SM ${p.gpuUtil}% | ${p.processName} | ${p.username}${cwdShort ? ` | ${cw}` : ""}${upStr ? ` | uptime: ${upStr}` : ""}`;
       const detailText = `${cw}$ ${cmd}`;
-      html += `<div class="proc-row" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree">${br}</span><span class="pid">${p.pid}</span><span class="mem ${memClass(p.memMib)}">${fmtMem(p.memMib)}</span><span class="ram">${fmtMem(p.ramMib)}</span><span class="gpu-idx">G${p.gpuIndex}</span><span class="pname">${esc(p.processName)}</span>${cwdTag}${timeInfo}<span class="user-tag">${esc(p.username)}</span><button class="btn-copy" data-copy="${esc(rowText)}" title="Copy">copy</button><button class="btn-kill" onclick="killProc(${p.pid},'${esc(p.processName)}',${p.memMib})">\u00D7</button></div>`;
+      html += `<div class="proc-row" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree">${br}</span><span class="pid">${p.pid}</span><span class="mem ${memClass(p.memMib)}">${fmtMem(p.memMib)}</span><span class="ram">${fmtMem(p.ramMib)}</span><span class="gpu-idx">G${p.gpuIndex}</span><span class="gpu-util ${smCls}" title="Per-process GPU SM utilization (nvidia-smi pmon)">${p.gpuUtil}%</span><span class="pname">${esc(p.processName)}</span>${cwdTag}${timeInfo}<span class="user-tag">${esc(p.username)}</span><button class="btn-copy" data-copy="${esc(rowText)}" title="Copy">copy</button><button class="btn-kill" onclick="killProc(${p.pid},'${esc(p.processName)}',${p.memMib})">\u00D7</button></div>`;
       html += `<div class="proc-detail" data-name="${esc(p.processName)}" data-user="${esc(p.username)}" data-container="${esc(cn)}"><span class="tree dim">${co}</span><span class="dim">\u2514 ${esc(cw)}$ ${esc(cmd)}</span><button class="btn-copy" data-copy="${esc(detailText)}" title="Copy">copy</button></div>`;
     }
   }
@@ -302,6 +305,7 @@ td.actions{text-align:right;white-space:nowrap}
 .mem{width:70px;text-align:right;font-weight:bold}
 .ram{width:60px;text-align:right;color:var(--dim)}
 .gpu-idx{width:24px;color:var(--dim)}
+.gpu-util{width:44px;text-align:right;font-size:11px;cursor:default}
 .pname{color:var(--fg);flex:1}
 .user-tag{color:var(--dim);font-size:11px;background:var(--card-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--border)}
 .uptime{color:var(--dim);font-size:11px;margin:0 4px;cursor:default}

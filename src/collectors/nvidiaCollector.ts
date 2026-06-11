@@ -363,9 +363,16 @@ export class NvidiaCollector implements IGpuCollector {
     const processes: GpuProcess[] = [];
 
     try {
-      const { stdout: procCsv } = await execCommand(
-        `${this.smiPath} --query-compute-apps=pid,used_memory,gpu_uuid,process_name --format=csv,noheader,nounits`,
-      ).catch(() => ({ stdout: "", stderr: "" }));
+      // Query process memory and per-process SM utilization in parallel.
+      // util.gpu is NOT exposed by --query-compute-apps; only `pmon` provides
+      // per-process SM%. pmon -c 1 blocks ~1s (its sampling window), so we run
+      // it concurrently with the (instant) memory query.
+      const [{ stdout: procCsv }, pmonMap] = await Promise.all([
+        execCommand(
+          `${this.smiPath} --query-compute-apps=pid,used_memory,gpu_uuid,process_name --format=csv,noheader,nounits`,
+        ).catch(() => ({ stdout: "", stderr: "" })),
+        this.collectPmonUtil(),
+      ]);
 
       const rawProcs: Array<{ pid: number; mem: number; gpuIdx: number; pname: string }> = [];
       for (const line of procCsv.trim().split("\n")) {
@@ -405,6 +412,7 @@ export class NvidiaCollector implements IGpuCollector {
             cmdline: detail.cmdline || r.pname,
             cwd: detail.cwd || "?",
             cpuPercent: 0,
+            gpuUtil: pmonMap.get(`${r.gpuIdx}:${r.pid}`) ?? pmonMap.get(`*:${r.pid}`) ?? 0,
             ramMib: detail.ramMib,
             uid: detail.uid,
             username,
@@ -443,6 +451,7 @@ export class NvidiaCollector implements IGpuCollector {
             cmdline: realCmdline || processName,
             cwd: "?",
             cpuPercent: 0,
+            gpuUtil: pmonMap.get(`${r.gpuIdx}:${r.pid}`) ?? pmonMap.get(`*:${r.pid}`) ?? 0,
             ramMib: detail?.rssMib || 0,
             uid: detail?.uid ?? -1,
             username,
@@ -455,5 +464,39 @@ export class NvidiaCollector implements IGpuCollector {
     }
 
     return processes;
+  }
+
+  /**
+   * Per-process GPU SM utilization via `nvidia-smi pmon -c 1`.
+   * Returns a map keyed by both `gpuIndex:pid` (exact) and `*:pid` (max across
+   * GPUs, used as a fallback when the GPU index can't be resolved from the UUID).
+   * SM% is sampled over pmon's ~1s window; a `-` means no activity that sample.
+   * Returns an empty map on any failure (pmon unsupported / no permission).
+   */
+  private async collectPmonUtil(): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (!this.smiPath) return map;
+    try {
+      const { stdout } = await execCommand(`${this.smiPath} pmon -c 1`, { timeout: 8000 });
+      for (const line of stdout.split("\n")) {
+        const t = line.trim();
+        if (!t || t.startsWith("#")) continue; // skip header/unit rows
+        const cols = t.split(/\s+/);
+        // Layout: gpu pid type sm mem enc dec [jpg ofa] command
+        if (cols.length < 4) continue;
+        const gpuIdx = parseInt(cols[0]);
+        const pid = parseInt(cols[1]);
+        if (isNaN(pid)) continue;
+        const sm = cols[3] === "-" ? 0 : parseInt(cols[3]);
+        const smVal = isNaN(sm) ? 0 : sm;
+        if (!isNaN(gpuIdx)) map.set(`${gpuIdx}:${pid}`, smVal);
+        // Track max SM across GPUs for pid-only fallback
+        const wildKey = `*:${pid}`;
+        map.set(wildKey, Math.max(map.get(wildKey) ?? 0, smVal));
+      }
+    } catch (e) {
+      logDebug(`[nvidia] pmon util query failed: ${e}`);
+    }
+    return map;
   }
 }

@@ -36,6 +36,8 @@ export interface GpuProcess {
   cmdline: string;
   cwd: string;
   cpuPercent: number;
+  /** Per-process GPU SM utilization % from nvidia-smi pmon (0 = idle/unknown) */
+  gpuUtil: number;
   ramMib: number;
   uid: number;
   username: string;

@@ -261,6 +261,7 @@ export class ProcessItem extends vscode.TreeItem {
   constructor(public readonly proc: GpuProcess) {
     super(proc.processName, vscode.TreeItemCollapsibleState.Collapsed);
     const parts = [`PID ${proc.pid}`, `VRAM ${fmtMem(proc.memMib)}`, `G${proc.gpuIndex}`];
+    if (proc.gpuUtil > 0) parts.push(`SM ${proc.gpuUtil}%`);
     if (proc.ramMib > 0) parts.push(`RAM ${fmtMem(proc.ramMib)}`);
     const uptime = fmtUptime(proc.startTime);
     if (uptime) parts.push(uptime);
