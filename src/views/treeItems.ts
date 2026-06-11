@@ -105,7 +105,7 @@ export class GpuItem extends vscode.TreeItem {
   ) {
     const pct = gpu.memTotal > 0 ? Math.round((gpu.memUsed / gpu.memTotal) * 100) : 0;
     super(`GPU ${gpu.index}`, vscode.TreeItemCollapsibleState.Expanded);
-    this.description = `${gpu.name} · ${fmtMem(gpu.memUsed)}/${fmtMem(gpu.memTotal)} · ${gpu.temp}\u00B0C`;
+    this.description = `${gpu.name} · ${gpu.util}% util · ${fmtMem(gpu.memUsed)}/${fmtMem(gpu.memTotal)} · ${gpu.temp}\u00B0C`;
     this.iconPath = new vscode.ThemeIcon("circuit-board", new vscode.ThemeColor(vramColor(pct)));
 
     const md = new vscode.MarkdownString("", true);

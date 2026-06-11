@@ -231,7 +231,7 @@ export class StatusBarController implements vscode.Disposable {
         const g = data.gpuData.gpus[i];
         const pct = g.memTotal > 0 ? Math.round((g.memUsed / g.memTotal) * 100) : 0;
         const item = this.gpuItems[i];
-        item.text = `$(pulse) GPU ${g.index} ${pct}%`;
+        item.text = `$(pulse) GPU ${g.index} ${g.util}% util · ${pct}% vram`;
         item.color = pctColor(pct);
         item.tooltip = buildGpuTooltip(g, data.gpuData.processes, data.containers);
       }
