@@ -1,10 +1,13 @@
 import { readFile } from "fs/promises";
-import { ISystemCollector } from "./interfaces";
-import { SystemInfo, DiskInfo } from "../types";
+import { ISystemCollector, CollectOptions } from "./interfaces";
+import { SystemInfo, DiskInfo, HostProcessInfo } from "../types";
 import { execCommand } from "../utils/exec";
+import { resolveContainerFromPid } from "./containerResolver";
 import { logDebug } from "../utils/logger";
 
 const DISK_CACHE_TTL = 60_000; // 60s — disk changes slowly
+const RESOLVE_MIN_RSS_MIB = 50; // only map sizeable processes to containers
+const RESOLVE_MAX = 250; // cap /proc/<pid>/cgroup reads per refresh
 
 export class LinuxSystemCollector implements ISystemCollector {
   private prevCpuIdle = 0;
@@ -12,7 +15,7 @@ export class LinuxSystemCollector implements ISystemCollector {
   private cachedDisks: DiskInfo[] = [];
   private diskCacheTime = 0;
 
-  async collect(): Promise<SystemInfo> {
+  async collect(containerNameMap?: Map<string, string>, opts?: CollectOptions): Promise<SystemInfo> {
     let cpuPercent = 0;
     try {
       const stat = await readFile("/proc/stat", "utf-8");
@@ -50,7 +53,62 @@ export class LinuxSystemCollector implements ISystemCollector {
       this.diskCacheTime = Date.now();
     }
 
-    return { cpuPercent, memUsedMib, memTotalMib, disks: this.cachedDisks };
+    // Host processes (RAM / CPU by user) — collected while either manager is expanded.
+    // A single ps call yields both rss and %cpu, so RAM and CPU share it.
+    let hostProcesses: HostProcessInfo[] = [];
+    if (opts?.ram || opts?.cpu) {
+      hostProcesses = await collectHostProcesses(containerNameMap ?? new Map());
+    }
+
+    // Disk-user breakdown (du) is orchestrated by MonitorService (cancellable + progress)
+    return {
+      cpuPercent,
+      memUsedMib,
+      memTotalMib,
+      disks: this.cachedDisks,
+      hostProcesses,
+      diskUsers: [],
+    };
+  }
+}
+
+/** Read all processes via ps and attribute the largest ones to containers via /proc cgroup. */
+async function collectHostProcesses(nameMap: Map<string, string>): Promise<HostProcessInfo[]> {
+  try {
+    // comm last so the fixed-width leading columns parse cleanly
+    const { stdout } = await execCommand(
+      "ps -eo pid,uid,user:32,pcpu,rss,comm --no-headers --sort=-rss 2>/dev/null",
+      { timeout: 5000 },
+    );
+    const procs: HostProcessInfo[] = [];
+    let resolved = 0;
+    for (const line of stdout.trim().split("\n")) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 6) continue;
+      const pid = parseInt(parts[0]);
+      const uid = parseInt(parts[1]);
+      const username = parts[2];
+      const cpuPercent = parseFloat(parts[3]) || 0;
+      const rssKb = parseInt(parts[4]);
+      const comm = parts.slice(5).join(" ");
+      if (!pid || !(rssKb > 0)) continue;
+      const rssMib = Math.round(rssKb / 1024);
+      let containerId = "";
+      let containerName = "";
+      if (resolved < RESOLVE_MAX && rssMib >= RESOLVE_MIN_RSS_MIB) {
+        resolved++;
+        const c = resolveContainerFromPid(pid, nameMap);
+        if (c.id) {
+          containerId = c.id;
+          containerName = c.name;
+        }
+      }
+      procs.push({ pid, uid, username, rssMib, cpuPercent, comm, containerId, containerName });
+    }
+    return procs;
+  } catch (e) {
+    logDebug(`[linux] host process collection failed: ${e}`);
+    return [];
   }
 }
 

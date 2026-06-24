@@ -7,11 +7,43 @@ export interface DiskInfo {
   usedPercent: number;
 }
 
+/** A host process with its RAM (RSS) usage, optionally attributed to a container. */
+export interface HostProcessInfo {
+  pid: number;
+  uid: number;
+  username: string;
+  /** Resident set size in MiB */
+  rssMib: number;
+  /** CPU usage % (ps %cpu — average over the process lifetime; can exceed 100 on multi-core) */
+  cpuPercent: number;
+  /** Process command name (comm) */
+  comm: string;
+  /** Container short id ("" if running on the host) */
+  containerId: string;
+  /** Container name ("" if running on the host) */
+  containerName: string;
+}
+
+/** Disk usage of a single directory (e.g. a user's home folder). */
+export interface DirUsage {
+  /** Full path, e.g. /home/yani */
+  path: string;
+  /** Last path component, e.g. yani */
+  name: string;
+  sizeGib: number;
+  /** The df mount this directory lives on */
+  mount: string;
+}
+
 export interface SystemInfo {
   cpuPercent: number;
   memUsedMib: number;
   memTotalMib: number;
   disks: DiskInfo[];
+  /** Per-process RAM usage (sorted by RSS desc). Empty if unavailable. */
+  hostProcesses: HostProcessInfo[];
+  /** Per-directory disk usage (e.g. home folders). Empty until first du completes. */
+  diskUsers: DirUsage[];
 }
 
 export interface GpuInfo {

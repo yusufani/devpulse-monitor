@@ -5,7 +5,7 @@ import { StatusBarController } from "./views/statusBar";
 import { GpuSidebarProvider } from "./views/gpuSidebar";
 import { ContainerTableViewProvider } from "./views/containerTableView";
 import { GpuMonitorPanel } from "./views/webview/gpuMonitorPanel";
-import { ProcessItem, ProcessDetailItem, ContainerItem } from "./views/treeItems";
+import { ProcessItem, ProcessDetailItem, ContainerItem, RamProcessItem, CpuProcessItem, RamManagerItem, CpuManagerItem, DiskManagerItem } from "./views/treeItems";
 import { fmtMem, fmtUptime, fmtStartDate } from "./utils/format";
 import { getOutputChannel, log } from "./utils/logger";
 
@@ -37,6 +37,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const gpuSidebar = new GpuSidebarProvider(monitor);
   const gpuSidebarView = vscode.window.createTreeView("gpuMonitor", { treeDataProvider: gpuSidebar });
   context.subscriptions.push(gpuSidebarView, gpuSidebar);
+
+  // Collect RAM / disk breakdowns only while their sections are expanded (saves CPU/du cost)
+  context.subscriptions.push(
+    gpuSidebarView.onDidExpandElement((e) => {
+      if (e.element instanceof RamManagerItem) monitor.setRamWanted(true);
+      else if (e.element instanceof CpuManagerItem) monitor.setCpuWanted(true);
+      else if (e.element instanceof DiskManagerItem) monitor.setDiskWanted(true);
+    }),
+    gpuSidebarView.onDidCollapseElement((e) => {
+      if (e.element instanceof RamManagerItem) monitor.setRamWanted(false);
+      else if (e.element instanceof CpuManagerItem) monitor.setCpuWanted(false);
+      else if (e.element instanceof DiskManagerItem) monitor.setDiskWanted(false);
+    }),
+  );
 
   // ── Status bar ────────────────────────────────────────────────
   const statusBar = new StatusBarController(monitor);
@@ -82,6 +96,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (
         (await vscode.window.showWarningMessage(
           `Kill PID ${p.pid} (${p.processName}, ${p.memMib}M VRAM)?`,
+          { modal: true },
+          "Kill",
+        )) === "Kill"
+      ) {
+        try {
+          await monitor.killProcess(p.pid);
+          vscode.window.showInformationMessage(`Killed PID ${p.pid}`);
+          monitor.refresh();
+        } catch (e) {
+          vscode.window.showErrorMessage(`${e}`);
+        }
+      }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.killHostProcess", async (item: RamProcessItem | CpuProcessItem) => {
+      if (!(item instanceof RamProcessItem) && !(item instanceof CpuProcessItem)) return;
+      const p = item.proc;
+      if (!p.pid) return;
+      if (
+        (await vscode.window.showWarningMessage(
+          `Kill PID ${p.pid} (${p.comm}, ${fmtMem(p.rssMib)} RAM, user ${p.username})?`,
           { modal: true },
           "Kill",
         )) === "Kill"

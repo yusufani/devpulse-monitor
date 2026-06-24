@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as os from "os";
 import { MonitorService } from "../services/monitorService";
 import { GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo, SystemInfo } from "../types";
 import { fmtMem, fmtUptime, fmtStartDate } from "../utils/format";
@@ -14,6 +15,21 @@ import {
   ProcessItem,
   ProcessDetailItem,
   GpuUserItem,
+  RamManagerItem,
+  RamMapItem,
+  RamUserItem,
+  RamContainerItem,
+  RamProcessItem,
+  CpuManagerItem,
+  CpuMapItem,
+  CpuUserItem,
+  CpuContainerItem,
+  CpuProcessItem,
+  UsageSegment,
+  DiskManagerItem,
+  DiskMountItem,
+  DiskUserItem,
+  InfoItem,
   OpenMonitorItem,
   ErrorItem,
   tempColor,
@@ -24,7 +40,7 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
   private _onDidChangeTreeData = new vscode.EventEmitter<SidebarItem | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  private system: SystemInfo = { cpuPercent: 0, memUsedMib: 0, memTotalMib: 0, disks: [] };
+  private system: SystemInfo = { cpuPercent: 0, memUsedMib: 0, memTotalMib: 0, disks: [], hostProcesses: [], diskUsers: [] };
   private gpus: GpuInfo[] = [];
   private gpuProcesses: GpuProcess[] = [];
   private containers: ContainerFullInfo[] = [];
@@ -58,12 +74,34 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
     if (element instanceof GpuUserItem) return this.getGpuUserChildren(element);
     if (element instanceof ContainerItem) return this.getContainerChildren(element);
     if (element instanceof ProcessItem) return this.getProcessChildren(element);
+    if (element instanceof RamManagerItem) return this.getRamChildren();
+    if (element instanceof RamUserItem) return this.getRamUserChildren(element);
+    if (element instanceof RamContainerItem) return this.getRamContainerChildren(element);
+    if (element instanceof CpuManagerItem) return this.getCpuChildren();
+    if (element instanceof CpuUserItem) return this.getCpuUserChildren(element);
+    if (element instanceof CpuContainerItem) return this.getCpuContainerChildren(element);
+    if (element instanceof DiskManagerItem) return this.getDiskChildren();
+    if (element instanceof DiskMountItem) return this.getDiskMountChildren(element);
     return [];
   }
 
   private getRootItems(): SidebarItem[] {
     const items: SidebarItem[] = [];
     items.push(new SystemItem(this.system));
+
+    const cfg = vscode.workspace.getConfiguration("dockerMonitor");
+    if (cfg.get<boolean>("cpuManager", true)) {
+      const userCount = new Set(this.system.hostProcesses.map((p) => p.username)).size;
+      items.push(new CpuManagerItem(this.system.cpuPercent, userCount));
+    }
+    if (cfg.get<boolean>("ramManager", true)) {
+      const userCount = new Set(this.system.hostProcesses.map((p) => p.username)).size;
+      items.push(new RamManagerItem(this.system.memUsedMib, this.system.memTotalMib, userCount));
+    }
+    if (cfg.get<boolean>("diskManager", true) && this.system.disks.length > 0) {
+      items.push(new DiskManagerItem(this.system.disks.length));
+    }
+
     if (this.gpuError && this.gpus.length === 0) {
       items.push(new ErrorItem("\u26A0 GPU error: " + this.gpuError));
     }
@@ -210,6 +248,160 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
       items.push(new ProcessDetailItem(timeLabel, "clock"));
     }
     return items;
+  }
+
+  // ── RAM Manager ──────────────────────────────────────────────────
+
+  private getRamChildren(): SidebarItem[] {
+    const items: SidebarItem[] = [];
+    const byUser = new Map<string, { rss: number; count: number }>();
+    for (const p of this.system.hostProcesses) {
+      const u = p.username || "unknown";
+      const e = byUser.get(u) || { rss: 0, count: 0 };
+      e.rss += p.rssMib;
+      e.count++;
+      byUser.set(u, e);
+    }
+    const sorted = [...byUser.entries()].sort((a, b) => b[1].rss - a[1].rss);
+
+    if (sorted.length === 0) {
+      items.push(new InfoItem("Loading…", "loading~spin"));
+      return items;
+    }
+
+    const segments: UsageSegment[] = sorted.slice(0, 10).map(([label, info]) => ({ label, value: info.rss }));
+    items.push(new RamMapItem(segments, this.system.memTotalMib));
+
+    for (const [user, info] of sorted.slice(0, 20)) {
+      items.push(new RamUserItem(user, info.count, info.rss));
+    }
+    return items;
+  }
+
+  private getRamUserChildren(el: RamUserItem): SidebarItem[] {
+    const items: SidebarItem[] = [];
+    const procs = this.system.hostProcesses.filter((p) => (p.username || "unknown") === el.username);
+
+    // Container groups first, sorted by total RSS
+    const byContainer = new Map<string, typeof procs>();
+    for (const p of procs) {
+      if (!p.containerId) continue;
+      const arr = byContainer.get(p.containerId) || [];
+      arr.push(p);
+      byContainer.set(p.containerId, arr);
+    }
+    const sortedContainers = [...byContainer.entries()].sort(
+      (a, b) => b[1].reduce((s, p) => s + p.rssMib, 0) - a[1].reduce((s, p) => s + p.rssMib, 0),
+    );
+    for (const [cid, cprocs] of sortedContainers) {
+      items.push(new RamContainerItem(cid, cprocs[0].containerName || cid, cprocs));
+    }
+
+    // Host (non-container) processes, top 15 by RSS
+    const hostProcs = procs.filter((p) => !p.containerId).sort((a, b) => b.rssMib - a.rssMib);
+    for (const p of hostProcs.slice(0, 15)) {
+      items.push(new RamProcessItem(p));
+    }
+    return items;
+  }
+
+  private getRamContainerChildren(el: RamContainerItem): SidebarItem[] {
+    return el.procs
+      .slice()
+      .sort((a, b) => b.rssMib - a.rssMib)
+      .slice(0, 15)
+      .map((p) => new RamProcessItem(p));
+  }
+
+  // ── CPU Manager ──────────────────────────────────────────────────
+
+  private getCpuChildren(): SidebarItem[] {
+    const items: SidebarItem[] = [];
+    const byUser = new Map<string, { cpu: number; count: number }>();
+    for (const p of this.system.hostProcesses) {
+      const u = p.username || "unknown";
+      const e = byUser.get(u) || { cpu: 0, count: 0 };
+      e.cpu += p.cpuPercent;
+      e.count++;
+      byUser.set(u, e);
+    }
+    // Only users with meaningful CPU, sorted desc
+    const sorted = [...byUser.entries()].filter(([, i]) => i.cpu >= 0.1).sort((a, b) => b[1].cpu - a[1].cpu);
+
+    if (this.system.hostProcesses.length === 0) {
+      items.push(new InfoItem("Loading…", "loading~spin"));
+      return items;
+    }
+    if (sorted.length === 0) {
+      items.push(new InfoItem("No significant CPU usage", "check"));
+      return items;
+    }
+
+    const capacity = os.cpus().length * 100;
+    const segments: UsageSegment[] = sorted.slice(0, 10).map(([label, info]) => ({ label, value: info.cpu }));
+    items.push(new CpuMapItem(segments, capacity));
+
+    for (const [user, info] of sorted.slice(0, 20)) {
+      items.push(new CpuUserItem(user, info.count, info.cpu));
+    }
+    return items;
+  }
+
+  private getCpuUserChildren(el: CpuUserItem): SidebarItem[] {
+    const items: SidebarItem[] = [];
+    const procs = this.system.hostProcesses.filter((p) => (p.username || "unknown") === el.username);
+
+    const byContainer = new Map<string, typeof procs>();
+    for (const p of procs) {
+      if (!p.containerId) continue;
+      const arr = byContainer.get(p.containerId) || [];
+      arr.push(p);
+      byContainer.set(p.containerId, arr);
+    }
+    const sortedContainers = [...byContainer.entries()].sort(
+      (a, b) => b[1].reduce((s, p) => s + p.cpuPercent, 0) - a[1].reduce((s, p) => s + p.cpuPercent, 0),
+    );
+    for (const [cid, cprocs] of sortedContainers) {
+      items.push(new CpuContainerItem(cid, cprocs[0].containerName || cid, cprocs));
+    }
+
+    const hostProcs = procs.filter((p) => !p.containerId).sort((a, b) => b.cpuPercent - a.cpuPercent);
+    for (const p of hostProcs.slice(0, 15)) {
+      items.push(new CpuProcessItem(p));
+    }
+    return items;
+  }
+
+  private getCpuContainerChildren(el: CpuContainerItem): SidebarItem[] {
+    return el.procs
+      .slice()
+      .sort((a, b) => b.cpuPercent - a.cpuPercent)
+      .slice(0, 15)
+      .map((p) => new CpuProcessItem(p));
+  }
+
+  // ── Disk Manager ─────────────────────────────────────────────────
+
+  private getDiskChildren(): SidebarItem[] {
+    const items: SidebarItem[] = [];
+    if (this.system.diskUsers.length === 0) {
+      if (this.monitor.isDiskComputing()) {
+        items.push(new InfoItem("Calculating disk usage… (cancel from the notification)", "loading~spin"));
+      } else {
+        items.push(new InfoItem("No per-user data — collapse & re-expand to recalculate", "info"));
+      }
+    }
+    for (const d of this.system.disks) {
+      const users = this.system.diskUsers
+        .filter((u) => u.mount === d.mount)
+        .sort((a, b) => b.sizeGib - a.sizeGib);
+      items.push(new DiskMountItem(d, users));
+    }
+    return items;
+  }
+
+  private getDiskMountChildren(el: DiskMountItem): SidebarItem[] {
+    return el.users.map((u) => new DiskUserItem(u, el.disk.usedGib));
   }
 
   dispose(): void {

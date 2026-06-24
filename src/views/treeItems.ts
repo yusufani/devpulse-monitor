@@ -1,6 +1,11 @@
 import * as vscode from "vscode";
-import { SystemInfo, GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo } from "../types";
+import { SystemInfo, GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo, HostProcessInfo, DiskInfo, DirUsage } from "../types";
 import { fmtMem, fmtUptime, fmtStartDate } from "../utils/format";
+
+function fmtGib(gib: number): string {
+  if (gib >= 1024) return `${(gib / 1024).toFixed(1)}T`;
+  return `${gib.toFixed(gib >= 10 ? 0 : 1)}G`;
+}
 
 // ── User Color Palette ───────────────────────────────────────────
 
@@ -77,6 +82,20 @@ export type SidebarItem =
   | ProcessDetailItem
   | UserItem
   | GpuUserItem
+  | RamManagerItem
+  | RamMapItem
+  | RamUserItem
+  | RamContainerItem
+  | RamProcessItem
+  | CpuManagerItem
+  | CpuMapItem
+  | CpuUserItem
+  | CpuContainerItem
+  | CpuProcessItem
+  | DiskManagerItem
+  | DiskMountItem
+  | DiskUserItem
+  | InfoItem
   | OpenMonitorItem
   | ErrorItem;
 
@@ -309,6 +328,250 @@ export class GpuUserItem extends vscode.TreeItem {
     this.description = `${procCount} proc · VRAM ${fmtMem(totalVram)}`;
     const color = getUserColor(username);
     this.iconPath = new vscode.ThemeIcon("person", new vscode.ThemeColor(color));
+  }
+}
+
+// ── RAM Manager Tree Items ────────────────────────────────────────
+
+/** Root "RAM Manager" section — host RAM usage, expands to per-user breakdown. */
+export class RamManagerItem extends vscode.TreeItem {
+  constructor(usedMib: number, totalMib: number, userCount: number) {
+    super("RAM Manager", vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = "ramManager"; // stable id so expand state persists across refreshes
+    const pct = totalMib > 0 ? Math.round((usedMib / totalMib) * 100) : 0;
+    const users = userCount > 0 ? ` · ${userCount} users` : "";
+    this.description = `${fmtMem(usedMib)}/${fmtMem(totalMib)} (${pct}%)${users}`;
+    this.iconPath = new vscode.ThemeIcon("server-environment", new vscode.ThemeColor(vramColor(pct)));
+    this.tooltip = `Host RAM: ${fmtMem(usedMib)} / ${fmtMem(totalMib)} (${pct}%)\nExpand to load per-user / per-process breakdown`;
+  }
+}
+
+export interface UsageSegment {
+  label: string;
+  value: number;
+}
+
+function buildUsageTooltip(
+  title: string,
+  segments: UsageSegment[],
+  total: number,
+  fmt: (n: number) => string,
+): vscode.MarkdownString {
+  const md = new vscode.MarkdownString("", true);
+  md.supportHtml = true;
+  md.isTrusted = true;
+  const used = segments.reduce((s, x) => s + x.value, 0);
+  const usedPct = total > 0 ? Math.round((used / total) * 100) : 0;
+  const barPx = 260;
+  let html = `<div style="font-family:monospace"><strong>${title} ${fmt(used)} / ${fmt(total)} (${usedPct}%)</strong>`;
+  html += `<div style="display:flex;width:${barPx}px;height:16px;border:1px solid #666;border-radius:3px;overflow:hidden;margin:4px 0">`;
+  for (const seg of segments) {
+    const w = total > 0 ? Math.max(2, Math.round((seg.value / total) * barPx)) : 0;
+    html += `<div style="width:${w}px;height:100%;background:${getUserHexColor(seg.label)}"></div>`;
+  }
+  const free = Math.max(0, total - used);
+  if (free > 0) html += `<div style="flex:1;height:100%;background:#333"></div>`;
+  html += `</div>`;
+  for (const seg of segments) {
+    const p = total > 0 ? Math.round((seg.value / total) * 100) : 0;
+    html += `<div><span style="color:${getUserHexColor(seg.label)}">■</span> ${seg.label} ${fmt(seg.value)} (${p}%)</div>`;
+  }
+  if (free > 0) {
+    const p = total > 0 ? Math.round((free / total) * 100) : 0;
+    html += `<div><span style="color:#555">□</span> free/other ${fmt(free)} (${p}%)</div>`;
+  }
+  html += `</div>`;
+  md.value = html;
+  return md;
+}
+
+/** Compact bar showing per-user RAM share of total memory. */
+export class RamMapItem extends vscode.TreeItem {
+  constructor(segments: UsageSegment[], totalMib: number) {
+    const barW = 15;
+    const used = segments.reduce((s, x) => s + x.value, 0);
+    const usedPct = totalMib > 0 ? Math.round((used / totalMib) * 100) : 0;
+    const usedBlocks = Math.min(barW, Math.round((usedPct / 100) * barW));
+    const bar = "█".repeat(usedBlocks) + "░".repeat(barW - usedBlocks);
+    super(bar, vscode.TreeItemCollapsibleState.None);
+    const legend = segments.slice(0, 4).map((s) => `${s.label}:${fmtMem(s.value)}`).join(" ");
+    this.description = `${usedPct}% ${legend}`;
+    this.iconPath = new vscode.ThemeIcon("graph", new vscode.ThemeColor(vramColor(usedPct)));
+    this.tooltip = buildUsageTooltip("RAM", segments, totalMib, fmtMem);
+  }
+}
+
+/** A user grouping under RAM Manager — expands to their containers + host processes. */
+export class RamUserItem extends vscode.TreeItem {
+  constructor(
+    public readonly username: string,
+    public readonly procCount: number,
+    public readonly rssMib: number,
+  ) {
+    super(username, vscode.TreeItemCollapsibleState.Collapsed);
+    this.description = `${fmtMem(rssMib)} · ${procCount} proc`;
+    this.iconPath = new vscode.ThemeIcon("person", new vscode.ThemeColor(getUserColor(username)));
+    this.tooltip = `${username}\nRAM: ${fmtMem(rssMib)}\nProcesses: ${procCount}`;
+  }
+}
+
+/** A container grouping under a RAM user — expands to its processes. */
+export class RamContainerItem extends vscode.TreeItem {
+  constructor(
+    public readonly containerId: string,
+    public readonly containerName: string,
+    public readonly procs: HostProcessInfo[],
+  ) {
+    super(containerName, vscode.TreeItemCollapsibleState.Collapsed);
+    const rss = procs.reduce((s, p) => s + p.rssMib, 0);
+    this.description = `${fmtMem(rss)} · ${procs.length} proc`;
+    this.iconPath = new vscode.ThemeIcon("package", new vscode.ThemeColor("terminal.ansiCyan"));
+    this.contextValue = "ramContainer";
+    this.tooltip = `${containerName}\nRAM: ${fmtMem(rss)}\nProcesses: ${procs.length}`;
+  }
+}
+
+/** A single host process under RAM Manager. */
+export class RamProcessItem extends vscode.TreeItem {
+  constructor(public readonly proc: HostProcessInfo) {
+    super(proc.comm || `PID ${proc.pid}`, vscode.TreeItemCollapsibleState.None);
+    const parts = [`PID ${proc.pid}`, `RAM ${fmtMem(proc.rssMib)}`];
+    if (proc.containerName) parts.push(`📦 ${proc.containerName}`);
+    this.description = parts.join(" · ");
+    this.iconPath = new vscode.ThemeIcon("symbol-method");
+    this.contextValue = "ramProcess";
+    const lines = [proc.comm || `PID ${proc.pid}`, `PID: ${proc.pid}`, `RAM: ${fmtMem(proc.rssMib)}`, `User: ${proc.username}`];
+    if (proc.containerName) lines.push(`Container: ${proc.containerName}`);
+    this.tooltip = lines.join("\n");
+  }
+}
+
+// ── CPU Manager Tree Items ────────────────────────────────────────
+
+function fmtCpu(pct: number): string {
+  return `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
+}
+
+/** Root "CPU Manager" section — host CPU usage, expands to per-user breakdown. */
+export class CpuManagerItem extends vscode.TreeItem {
+  constructor(cpuPercent: number, userCount: number) {
+    super("CPU Manager", vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = "cpuManager"; // stable id so expand state persists across refreshes
+    const users = userCount > 0 ? ` · ${userCount} users` : "";
+    this.description = `${cpuPercent}%${users}`;
+    const color = cpuPercent > 80 ? "errorForeground" : cpuPercent > 50 ? "editorWarning.foreground" : "testing.iconPassed";
+    this.iconPath = new vscode.ThemeIcon("pulse", new vscode.ThemeColor(color));
+    this.tooltip = `Host CPU: ${cpuPercent}%\nExpand to load per-user / per-process breakdown`;
+  }
+}
+
+/** Compact bar showing per-user CPU share (relative to total cores × 100%). */
+export class CpuMapItem extends vscode.TreeItem {
+  constructor(segments: UsageSegment[], totalCapacity: number) {
+    const barW = 15;
+    const used = segments.reduce((s, x) => s + x.value, 0);
+    const usedPct = totalCapacity > 0 ? Math.round((used / totalCapacity) * 100) : 0;
+    const usedBlocks = Math.min(barW, Math.round((usedPct / 100) * barW));
+    const bar = "█".repeat(usedBlocks) + "░".repeat(barW - usedBlocks);
+    super(bar, vscode.TreeItemCollapsibleState.None);
+    const legend = segments.slice(0, 4).map((s) => `${s.label}:${fmtCpu(s.value)}`).join(" ");
+    this.description = `${usedPct}% ${legend}`;
+    this.iconPath = new vscode.ThemeIcon("graph", new vscode.ThemeColor(vramColor(usedPct)));
+    this.tooltip = buildUsageTooltip("CPU", segments, totalCapacity, fmtCpu);
+  }
+}
+
+/** A user grouping under CPU Manager — expands to their containers + host processes. */
+export class CpuUserItem extends vscode.TreeItem {
+  constructor(
+    public readonly username: string,
+    public readonly procCount: number,
+    public readonly cpuPercent: number,
+  ) {
+    super(username, vscode.TreeItemCollapsibleState.Collapsed);
+    this.description = `${fmtCpu(cpuPercent)} · ${procCount} proc`;
+    this.iconPath = new vscode.ThemeIcon("person", new vscode.ThemeColor(getUserColor(username)));
+    this.tooltip = `${username}\nCPU: ${fmtCpu(cpuPercent)}\nProcesses: ${procCount}`;
+  }
+}
+
+/** A container grouping under a CPU user — expands to its processes. */
+export class CpuContainerItem extends vscode.TreeItem {
+  constructor(
+    public readonly containerId: string,
+    public readonly containerName: string,
+    public readonly procs: HostProcessInfo[],
+  ) {
+    super(containerName, vscode.TreeItemCollapsibleState.Collapsed);
+    const cpu = procs.reduce((s, p) => s + p.cpuPercent, 0);
+    this.description = `${fmtCpu(cpu)} · ${procs.length} proc`;
+    this.iconPath = new vscode.ThemeIcon("package", new vscode.ThemeColor("terminal.ansiCyan"));
+    this.contextValue = "cpuContainer";
+    this.tooltip = `${containerName}\nCPU: ${fmtCpu(cpu)}\nProcesses: ${procs.length}`;
+  }
+}
+
+/** A single host process under CPU Manager. */
+export class CpuProcessItem extends vscode.TreeItem {
+  constructor(public readonly proc: HostProcessInfo) {
+    super(proc.comm || `PID ${proc.pid}`, vscode.TreeItemCollapsibleState.None);
+    const parts = [`PID ${proc.pid}`, `CPU ${fmtCpu(proc.cpuPercent)}`, `RAM ${fmtMem(proc.rssMib)}`];
+    if (proc.containerName) parts.push(`📦 ${proc.containerName}`);
+    this.description = parts.join(" · ");
+    this.iconPath = new vscode.ThemeIcon("symbol-method");
+    this.contextValue = "cpuProcess";
+    const lines = [proc.comm || `PID ${proc.pid}`, `PID: ${proc.pid}`, `CPU: ${fmtCpu(proc.cpuPercent)}`, `RAM: ${fmtMem(proc.rssMib)}`, `User: ${proc.username}`];
+    if (proc.containerName) lines.push(`Container: ${proc.containerName}`);
+    this.tooltip = lines.join("\n");
+  }
+}
+
+// ── Disk Manager Tree Items ───────────────────────────────────────
+
+/** Root "Disk Manager" section — expands to per-mount items. */
+export class DiskManagerItem extends vscode.TreeItem {
+  constructor(mountCount: number) {
+    super("Disk Manager", vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = "diskManager"; // stable id so expand state persists across refreshes
+    this.description = `${mountCount} mounts`;
+    this.iconPath = new vscode.ThemeIcon("database");
+    this.tooltip = "Disk usage per mount and per user home folder\nExpand to load per-user breakdown (du runs in the background)";
+  }
+}
+
+/** A plain informational / loading placeholder row. */
+export class InfoItem extends vscode.TreeItem {
+  constructor(label: string, icon = "info") {
+    super(label, vscode.TreeItemCollapsibleState.None);
+    this.iconPath = new vscode.ThemeIcon(icon);
+  }
+}
+
+/** A single df mount under Disk Manager — expands to the user dirs that live on it. */
+export class DiskMountItem extends vscode.TreeItem {
+  constructor(
+    public readonly disk: DiskInfo,
+    public readonly users: DirUsage[],
+  ) {
+    super(disk.mount, users.length > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+    const barW = 10;
+    const blocks = Math.min(barW, Math.round((disk.usedPercent / 100) * barW));
+    const bar = "█".repeat(blocks) + "░".repeat(barW - blocks);
+    const warn = disk.usedPercent >= 90 ? " ⚠" : "";
+    this.description = `${bar} ${fmtGib(disk.usedGib)}/${fmtGib(disk.totalGib)} (${disk.usedPercent}%)${warn}`;
+    this.iconPath = new vscode.ThemeIcon("disc", new vscode.ThemeColor(vramColor(disk.usedPercent)));
+    this.tooltip = `${disk.mount} (${disk.device})\nUsed: ${fmtGib(disk.usedGib)} / ${fmtGib(disk.totalGib)} (${disk.usedPercent}%)\nFree: ${fmtGib(disk.freeGib)}`;
+  }
+}
+
+/** A user's directory size under a disk mount. */
+export class DiskUserItem extends vscode.TreeItem {
+  constructor(usage: DirUsage, mountUsedGib: number) {
+    super(usage.name, vscode.TreeItemCollapsibleState.None);
+    const share = mountUsedGib > 0 ? Math.round((usage.sizeGib / mountUsedGib) * 100) : 0;
+    this.description = `${fmtGib(usage.sizeGib)}${share > 0 ? ` · ${share}% of used` : ""}`;
+    this.iconPath = new vscode.ThemeIcon("folder", new vscode.ThemeColor(getUserColor(usage.name)));
+    this.tooltip = `${usage.path}\nSize: ${fmtGib(usage.sizeGib)}`;
   }
 }
 

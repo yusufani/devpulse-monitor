@@ -1,5 +1,5 @@
-import { ISystemCollector } from "./interfaces";
-import { SystemInfo, DiskInfo } from "../types";
+import { ISystemCollector, CollectOptions } from "./interfaces";
+import { SystemInfo, DiskInfo, HostProcessInfo } from "../types";
 import { execCommand } from "../utils/exec";
 import { log, logDebug } from "../utils/logger";
 
@@ -12,7 +12,7 @@ export class DarwinSystemCollector implements ISystemCollector {
   private cachedDisks: DiskInfo[] = [];
   private diskCacheTime = 0;
 
-  async collect(): Promise<SystemInfo> {
+  async collect(_containerNameMap?: Map<string, string>, opts?: CollectOptions): Promise<SystemInfo> {
     let cpuPercent = 0;
     try {
       // Use top to get CPU usage (two samples, use the second)
@@ -64,7 +64,39 @@ export class DarwinSystemCollector implements ISystemCollector {
       this.diskCacheTime = Date.now();
     }
 
-    return { cpuPercent, memUsedMib, memTotalMib, disks: this.cachedDisks };
+    // Host processes (RAM by user) — only while RAM Manager is expanded.
+    // Container attribution is not available on macOS.
+    const hostProcesses: HostProcessInfo[] = [];
+    try {
+      if (opts?.ram || opts?.cpu) {
+      const { stdout } = await execCommand("ps -axo pid,uid,user,pcpu,rss,comm -r 2>/dev/null", { timeout: 5000 });
+      for (const line of stdout.trim().split("\n").slice(1)) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 6) continue;
+        const pid = parseInt(parts[0]);
+        const uid = parseInt(parts[1]);
+        const username = parts[2];
+        const cpuPercent = parseFloat(parts[3]) || 0;
+        const rssKb = parseInt(parts[4]);
+        const comm = parts.slice(5).join(" ");
+        if (!pid || !(rssKb > 0)) continue;
+        hostProcesses.push({
+          pid,
+          uid,
+          username,
+          rssMib: Math.round(rssKb / 1024),
+          cpuPercent,
+          comm,
+          containerId: "",
+          containerName: "",
+        });
+      }
+      }
+    } catch (e) {
+      logDebug(`[darwin] host process collection failed: ${e}`);
+    }
+
+    return { cpuPercent, memUsedMib, memTotalMib, disks: this.cachedDisks, hostProcesses, diskUsers: [] };
   }
 }
 

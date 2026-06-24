@@ -1,20 +1,30 @@
 import * as vscode from "vscode";
 import * as os from "os";
-import { SystemInfo, GpuData, ContainerFullInfo, ContainerInspect, MonitorData } from "../types";
+import { SystemInfo, GpuData, ContainerFullInfo, ContainerInspect, MonitorData, DirUsage } from "../types";
 import { ISystemCollector, IGpuCollector, IDockerCollector } from "../collectors/interfaces";
+import { computeDiskUsers } from "../collectors/diskUsage";
 import { fmtMem } from "../utils/format";
 import { log, logDebug } from "../utils/logger";
+
+const DISK_USERS_TTL = 600_000; // 10 min — du is expensive, refresh slowly
 
 export class MonitorService implements vscode.Disposable {
   private _onDataUpdated = new vscode.EventEmitter<MonitorData>();
   readonly onDataUpdated = this._onDataUpdated.event;
 
-  private system: SystemInfo = { cpuPercent: 0, memUsedMib: 0, memTotalMib: 0, disks: [] };
+  private system: SystemInfo = { cpuPercent: 0, memUsedMib: 0, memTotalMib: 0, disks: [], hostProcesses: [], diskUsers: [] };
   private gpuData: GpuData = { gpus: [], processes: [], containerStats: new Map(), timestamp: 0, error: "" };
   private containers: ContainerFullInfo[] = [];
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshing = false;
   private gpuEnabled: boolean;
+  private wantRam = false; // set true while the RAM Manager section is expanded
+  private wantCpu = false; // set true while the CPU Manager section is expanded
+  private wantDisk = false; // set true while the Disk Manager section is expanded
+  private diskUsers: DirUsage[] = [];
+  private diskUsersTime = 0;
+  private diskUsersComputing = false;
+  private diskUsersCts?: vscode.CancellationTokenSource;
   private alertFired = new Set<number>(); // GPU indices that already fired alert
   private idleAlertFired = new Set<number>(); // GPU indices that fired idle alert
   private prevContainerIds = new Set<string>(); // for death detection
@@ -59,19 +69,24 @@ export class MonitorService implements vscode.Disposable {
     this.refreshing = true;
     try {
       try {
-        // Collect system info and container list in parallel (fast)
-        const [system, containers] = await Promise.all([
-          this.systemCollector.collect(),
-          this.dockerCollector.getAllRunningContainers(),
-        ]);
-        this.system = system;
+        // Container list first so we can attribute host processes to containers
+        const containers = await this.dockerCollector.getAllRunningContainers();
         this.containers = containers;
+        // getContainerNames returns cached data from getAllRunningContainers above — no extra docker ps call
+        const containerNameMap = await this.dockerCollector.getContainerNames();
+        // System info — RAM/disk breakdowns only collected while their sections are expanded
+        this.system = await this.systemCollector.collect(containerNameMap, {
+          ram: this.wantRam,
+          cpu: this.wantCpu,
+          disk: this.wantDisk,
+        });
+        // Attach the cached disk-user breakdown; (re)compute it in the background if needed
+        this.system.diskUsers = this.diskUsers;
+        this.maybeComputeDiskUsers();
 
         // GPU data — optional, graceful if missing
         if (this.gpuEnabled) {
           try {
-            // getContainerNames returns cached data from getAllRunningContainers above — no extra docker ps call
-            const containerNameMap = await this.dockerCollector.getContainerNames();
             const [gpus, processes, containerStats] = await Promise.all([
               this.gpuCollector.collectGpus(),
               this.gpuCollector.collectProcesses(containerNameMap),
@@ -192,6 +207,88 @@ export class MonitorService implements vscode.Disposable {
 
   getGpuHistory(): typeof this.gpuHistory {
     return this.gpuHistory;
+  }
+
+  /** Toggle on-demand RAM collection (called when the RAM Manager section expands/collapses). */
+  setRamWanted(wanted: boolean): void {
+    if (wanted && !this.wantRam) {
+      this.wantRam = true;
+      this.refresh(); // fetch immediately so data appears on expand
+    } else {
+      this.wantRam = wanted;
+    }
+  }
+
+  /** Toggle on-demand CPU collection (called when the CPU Manager section expands/collapses). */
+  setCpuWanted(wanted: boolean): void {
+    if (wanted && !this.wantCpu) {
+      this.wantCpu = true;
+      this.refresh();
+    } else {
+      this.wantCpu = wanted;
+    }
+  }
+
+  /** Toggle on-demand disk-user collection (called when the Disk Manager section expands/collapses). */
+  setDiskWanted(wanted: boolean): void {
+    this.wantDisk = wanted;
+    if (!wanted) {
+      // Collapsing stops any in-flight du immediately
+      this.diskUsersCts?.cancel();
+      return;
+    }
+    // (Re)expanding recomputes if we have no fresh data yet
+    if (this.diskUsers.length === 0 || Date.now() - this.diskUsersTime >= DISK_USERS_TTL) {
+      this.diskUsersTime = 0; // force recompute on this expand
+    }
+    this.refresh();
+  }
+
+  /** True while a du pass is running (used by the sidebar to show "Calculating…"). */
+  isDiskComputing(): boolean {
+    return this.diskUsersComputing;
+  }
+
+  /** Kick off a cancellable, progress-reporting du pass when the Disk Manager is open and data is stale. */
+  private maybeComputeDiskUsers(): void {
+    if (!this.wantDisk || this.diskUsersComputing) return;
+    if (Date.now() - this.diskUsersTime < DISK_USERS_TTL) return;
+    const paths = vscode.workspace.getConfiguration("dockerMonitor").get<string[]>("diskUsagePaths", ["/home"]);
+    if (paths.length === 0) return;
+
+    this.diskUsersComputing = true;
+    this.diskUsersTime = Date.now(); // start the TTL clock at launch so a cancel doesn't loop
+    const cts = new vscode.CancellationTokenSource();
+    this.diskUsersCts = cts;
+    const mounts = this.system.disks;
+
+    vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        cancellable: true,
+        title: "DevPulse: Calculating disk usage (du)…",
+      },
+      async (progress, token) => {
+        const linked = token.onCancellationRequested(() => cts.cancel());
+        try {
+          const users = await computeDiskUsers(paths, mounts, cts.token, (msg) => progress.report({ message: msg }));
+          if (!cts.token.isCancellationRequested) {
+            this.diskUsers = users;
+            this.diskUsersTime = Date.now();
+            this.system.diskUsers = users;
+            this._onDataUpdated.fire(this.getLatestData());
+          }
+        } catch (e) {
+          log(`Disk usage computation failed: ${e}`);
+        } finally {
+          linked.dispose();
+          this.diskUsersComputing = false;
+          if (this.diskUsersCts === cts) this.diskUsersCts = undefined;
+          // Refresh the tree so the "Calculating…" placeholder is replaced/cleared
+          this._onDataUpdated.fire(this.getLatestData());
+        }
+      },
+    );
   }
 
   private checkVramAlerts(): void {

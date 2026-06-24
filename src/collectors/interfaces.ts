@@ -1,7 +1,18 @@
 import { SystemInfo, GpuInfo, GpuProcess, ContainerStats, ContainerFullInfo, ContainerInspect } from "../types";
 
+/** Which on-demand (potentially expensive) sections to collect this cycle. */
+export interface CollectOptions {
+  /** Collect per-process RAM usage (ps). Set when RAM Manager is expanded. */
+  ram?: boolean;
+  /** Collect per-process CPU usage (ps). Set when CPU Manager is expanded. */
+  cpu?: boolean;
+  /** Collect per-user disk usage (du). Set when Disk Manager is expanded. */
+  disk?: boolean;
+}
+
 export interface ISystemCollector {
-  collect(): Promise<SystemInfo>;
+  /** containerNameMap (short id -> name) is used to attribute host processes to containers. */
+  collect(containerNameMap?: Map<string, string>, opts?: CollectOptions): Promise<SystemInfo>;
 }
 
 export interface IGpuCollector {
