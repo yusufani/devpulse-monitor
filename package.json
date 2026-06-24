@@ -3,7 +3,7 @@
   "displayName": "DevPulse Monitor - CPU RAM GPU Docker Monitor",
   "description": "Real-time GPU, CPU, RAM monitoring with container resource tracking for VS Code",
   "icon": "images/icon.png",
-  "version": "1.19.0",
+  "version": "1.15.0",
   "publisher": "ANISOFT",
   "license": "SEE LICENSE IN LICENSE",
   "sponsor": {
@@ -117,8 +117,12 @@
         },
         "dockerMonitor.diskUsagePaths": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["/home"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "/home"
+          ],
           "description": "Base directories whose first-level subfolders are measured with du for the Disk Manager (e.g. ['/home', '/data']). Calculated in the background every 10 minutes; large directories may take a while on first run."
         }
       }

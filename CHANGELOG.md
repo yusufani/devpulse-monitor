@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.0](https://github.com/yusufani/devpulse-monitor/compare/v1.14.0...v1.15.0) (2026-06-24)
+
+
+### Features
+
+* add disk usage monitoring and management features ([14ebfe9](https://github.com/yusufani/devpulse-monitor/commit/14ebfe97fb42f096d8872e98442bdb73cdeb0ebc))
+
 ## [1.14.0](https://github.com/yusufani/devpulse-monitor/compare/v1.13.0...v1.14.0) (2026-06-11)
 
 
