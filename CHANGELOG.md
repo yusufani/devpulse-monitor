@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.14.0](https://github.com/yusufani/devpulse-monitor/compare/v1.13.0...v1.14.0) (2026-06-11)
+
+
+### Features
+
+* add support command to GPU monitor for project sponsorship ([f810830](https://github.com/yusufani/devpulse-monitor/commit/f810830d428006b24dc349e8773950029fcf4e76))
+* bump version to 1.15.0 and add sponsor information in package.json ([8ba0234](https://github.com/yusufani/devpulse-monitor/commit/8ba0234bb77ed96f3503fb399326af5e9699788b))
+* update GPU monitoring to include per-process SM utilization and version bump to 1.16.0 ([aa682b5](https://github.com/yusufani/devpulse-monitor/commit/aa682b5d57967d9fb6917ffed46d2cabf5d2fb3f))
+
 ## [1.13.0](https://github.com/yusufani/devpulse-monitor/compare/v1.12.0...v1.13.0) (2026-06-11)
 
 
