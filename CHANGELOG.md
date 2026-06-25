@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.1](https://github.com/yusufani/devpulse-monitor/compare/v1.15.0...v1.15.1) (2026-06-25)
+
+
+### Bug Fixes
+
+* reset release-please manifest to actual released version 1.15.0 ([16f71aa](https://github.com/yusufani/devpulse-monitor/commit/16f71aa9bcc9514442615a32b2373da5f97a2c1b))
+
 ## [1.15.0](https://github.com/yusufani/devpulse-monitor/compare/v1.14.0...v1.15.0) (2026-06-24)
 
 
