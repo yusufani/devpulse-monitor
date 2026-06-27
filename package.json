@@ -79,6 +79,11 @@
           "default": "",
           "description": "Custom path to kubectl binary (auto-detected if empty)"
         },
+        "dockerMonitor.hostProcHelperImage": {
+          "type": "string",
+          "default": "",
+          "description": "When DevPulse runs INSIDE a container, host process/owner attribution for GPU processes is recovered by launching a short-lived helper container (via the mounted docker.sock) that reads the host's /proc. This sets the image to use (must already exist locally; needs a busybox/POSIX sh). Empty = auto-pick a local alpine/busybox image. Leave empty unless auto-pick fails."
+        },
         "dockerMonitor.kubernetes.enabled": {
           "type": "boolean",
           "default": true,

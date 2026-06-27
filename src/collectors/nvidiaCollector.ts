@@ -5,7 +5,8 @@ import { GpuInfo, GpuProcess } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
 import { detectPlatform } from "../utils/platform";
 import { log, logDebug } from "../utils/logger";
-import { resolveContainerFromPid } from "./containerResolver";
+import { resolveContainerFromPid, extractContainerShortId } from "./containerResolver";
+import { readHostProcViaDocker } from "../utils/hostProcHelper";
 
 function readProcFile(filePath: string): string {
   try {
@@ -401,18 +402,41 @@ export class NvidiaCollector implements IGpuCollector {
 
         processes.push(...resolved);
       } else {
-        // Fallback: use docker top to build PID→container map with rich detail
+        // In-container fallback. nvidia-smi reports HOST pids that don't exist in our
+        // PID namespace, so /proc is useless here. Two recovery paths, best first:
+        //   1) host /proc bridge via a helper container (resolves owner + container/pod
+        //      via cgroup for ALL host pids, including k8s/containerd pods);
+        //   2) docker top (only sees docker containers — misses pods & host procs).
         const docker = (await findBinary("docker")) || "docker";
-        const pidMap = await buildDockerPidMap(docker, containerNameMap);
+        const [hostProc, pidMap] = await Promise.all([
+          readHostProcViaDocker(docker, rawProcs.map((r) => r.pid)),
+          buildDockerPidMap(docker, containerNameMap),
+        ]);
 
         for (const r of rawProcs) {
-          const detail = pidMap.pidToDetail.get(r.pid);
-          const container = detail?.container || { id: "", name: "host" };
-          const username = detail?.user || "?";
-          // Use cmdline from docker top when nvidia-smi returns [Not Found]
+          const hp = hostProc.get(r.pid);
+          const topDetail = pidMap.pidToDetail.get(r.pid);
+
+          // Container/pod attribution: prefer cgroup (host /proc) → pod/container,
+          // then docker top, else host.
+          let container = { id: "", name: "host" };
+          if (hp?.cgroup) {
+            const cid = extractContainerShortId(hp.cgroup);
+            if (cid) {
+              const pod = podIndex?.get(cid);
+              container = pod ? { id: pod.id, name: pod.name } : { id: cid, name: containerNameMap.get(cid) || cid };
+            }
+          }
+          if (!container.id && topDetail?.container) container = topDetail.container;
+
+          const username = hp?.username || topDetail?.user || "?";
+          const uid = (hp && hp.uid >= 0 ? hp.uid : undefined) ?? topDetail?.uid ?? -1;
+          const ramMib = hp?.rssMib || topDetail?.rssMib || 0;
+
+          // Use cmdline from host /proc or docker top when nvidia-smi returns [Not Found]
           const nvidiaName = r.pname;
           const isNotFound = !nvidiaName || nvidiaName === "[Not Found]";
-          const realCmdline = detail?.cmdline || (isNotFound ? "" : nvidiaName);
+          const realCmdline = hp?.cmdline || topDetail?.cmdline || (isNotFound ? "" : nvidiaName);
           const processName = isNotFound
             ? (realCmdline.split(/\s+/)[0]?.split("/").pop() || "unknown")
             : (nvidiaName.split("/").pop() || nvidiaName);
@@ -424,13 +448,13 @@ export class NvidiaCollector implements IGpuCollector {
             containerId: container.id,
             containerName: container.name,
             cmdline: realCmdline || processName,
-            cwd: "?",
+            cwd: hp?.cwd || "?",
             cpuPercent: 0,
             gpuUtil: pmonMap.get(`${r.gpuIdx}:${r.pid}`) ?? pmonMap.get(`*:${r.pid}`) ?? 0,
-            ramMib: detail?.rssMib || 0,
-            uid: detail?.uid ?? -1,
+            ramMib,
+            uid,
             username,
-            startTime: 0,
+            startTime: hp?.startTime || 0,
           });
         }
       }

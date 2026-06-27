@@ -88,6 +88,10 @@ export class KubernetesCollector implements IContainerCollector {
   private cachedStats = new Map<string, ContainerStats>();
   private lastStatsTime = 0;
 
+  // Logged-once flag: node-scope requested but local cgroup is unreadable
+  // (typical when the extension host itself runs inside a container).
+  private warnedNodeScopeUnavailable = false;
+
   constructor(private readonly opts: KubernetesOptions) {}
 
   private get kubectl(): string {
@@ -117,17 +121,25 @@ export class KubernetesCollector implements IContainerCollector {
     return this.available;
   }
 
-  /** Read the set of container short ids that have a cgroup on THIS host (node scoping). */
-  private collectLocalContainerIds(): Set<string> {
+  /**
+   * Read the set of container short ids that have a cgroup on THIS host (node scoping).
+   * Returns `null` when the kubepods cgroup root is unreadable — this happens when the
+   * extension host runs inside a container with its own (private) cgroup namespace, where
+   * the host's pod cgroups are simply not visible. In that case node-scoping is impossible
+   * and the caller must fall back to showing all pods instead of filtering everything out.
+   * An empty (non-null) Set means the root was readable but no local pod containers exist.
+   */
+  private collectLocalContainerIds(): Set<string> | null {
+    let rootEntries: string[];
+    try {
+      rootEntries = readdirSync(KUBEPODS_CGROUP);
+    } catch {
+      return null; // cgroup root not visible (in-container) — cannot node-scope
+    }
+
     const ids = new Set<string>();
-    const walk = (dir: string, depth: number) => {
+    const walk = (entries: string[], dir: string, depth: number) => {
       if (depth > 4) return;
-      let entries: string[];
-      try {
-        entries = readdirSync(dir);
-      } catch {
-        return;
-      }
       for (const name of entries) {
         let m = name.match(/^cri-containerd-([0-9a-f]{64})\.scope$/);
         if (!m) m = name.match(/^crio-([0-9a-f]{64})\.scope$/);
@@ -135,10 +147,17 @@ export class KubernetesCollector implements IContainerCollector {
           ids.add(m[1].substring(0, 12));
           continue;
         }
-        if (name.endsWith(".slice")) walk(`${dir}/${name}`, depth + 1);
+        if (name.endsWith(".slice")) {
+          const child = `${dir}/${name}`;
+          try {
+            walk(readdirSync(child), child, depth + 1);
+          } catch {
+            /* unreadable sub-slice — skip */
+          }
+        }
       }
     };
-    walk(KUBEPODS_CGROUP, 0);
+    walk(rootEntries, KUBEPODS_CGROUP, 0);
     return ids;
   }
 
@@ -150,7 +169,21 @@ export class KubernetesCollector implements IContainerCollector {
       return this.lastPodList;
     }
 
-    const localIds = this.opts.scope === "node" ? this.collectLocalContainerIds() : null;
+    // Node-scope: enumerate container ids that live on this host. When the cgroup root
+    // is unreadable (extension host inside a container), collectLocalContainerIds()
+    // returns null — node-scoping is impossible, so we degrade to cluster scope (show
+    // all pods) rather than filtering every pod out and showing nothing.
+    let localIds: Set<string> | null = null;
+    if (this.opts.scope === "node") {
+      localIds = this.collectLocalContainerIds();
+      if (localIds === null && !this.warnedNodeScopeUnavailable) {
+        this.warnedNodeScopeUnavailable = true;
+        log(
+          "[k8s] node scope requested but local pod cgroups are not visible " +
+            "(running inside a container?) — showing all cluster pods instead",
+        );
+      }
+    }
 
     try {
       const { stdout } = await execCommand(`${this.kubectl} get pods -A -o json --request-timeout=8s`, {
