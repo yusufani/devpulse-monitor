@@ -30,7 +30,7 @@ export async function findBinary(name: string): Promise<string | null> {
 
 export async function execCommand(
   command: string,
-  options: { timeout?: number; retries?: number } = {},
+  options: { timeout?: number; retries?: number; maxBuffer?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   const maxRetries = options.retries ?? 0;
   let lastError: unknown;
@@ -39,6 +39,9 @@ export async function execCommand(
       return await execAsync(command, {
         shell: getShell(),
         timeout: options.timeout ?? 30000,
+        // Default Node maxBuffer is 1 MiB; large JSON outputs (e.g. `kubectl get pods
+        // -A -o json` across a cluster) can exceed it and throw. Allow override.
+        maxBuffer: options.maxBuffer ?? 16 * 1024 * 1024,
       });
     } catch (e) {
       lastError = e;

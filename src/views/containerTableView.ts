@@ -6,6 +6,8 @@ interface ContainerRow {
   id: string;
   name: string;
   owner: string;
+  source: string;
+  namespace: string;
   health: string;
   composeProject: string;
   uptime: string;
@@ -46,7 +48,13 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
         vscode.commands.executeCommand("gpuMonitor.execContainer", msg.containerId, msg.name);
       } else if (msg.command === "logs") {
         const terminal = vscode.window.createTerminal(`Logs: ${msg.name}`);
-        terminal.sendText(`docker logs -f --tail 100 ${msg.containerId}`);
+        if (typeof msg.containerId === "string" && msg.containerId.startsWith("k8s:")) {
+          const rest = msg.containerId.slice(4); const slash = rest.indexOf("/");
+          const kubectl = vscode.workspace.getConfiguration("dockerMonitor").get<string>("kubectlBinary", "") || "kubectl";
+          terminal.sendText(`${kubectl} logs -f --tail 100 -n ${rest.substring(0, slash)} ${rest.substring(slash + 1)} --all-containers`);
+        } else {
+          terminal.sendText(`docker logs -f --tail 100 ${msg.containerId}`);
+        }
         terminal.show();
       } else if (msg.command === "attach") {
         vscode.commands.executeCommand("gpuMonitor.attachContainer", msg.containerId, msg.name);
@@ -159,6 +167,8 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
         id: c.id,
         name: c.name,
         owner: c.ownerName,
+        source: c.source || "docker",
+        namespace: c.namespace || "",
         health: c.health,
         composeProject: c.composeProject,
         uptime: c.uptime,
@@ -184,6 +194,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     const jsonData = JSON.stringify(rows);
     const gpuIndicesJson = JSON.stringify(gpuIndices);
     const notificationsEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("enableNotifications", false);
+    const version = vscode.extensions.getExtension("ANISOFT.devpulse-monitor")?.packageJSON.version ?? "?";
 
     return `<!DOCTYPE html>
 <html>
@@ -372,6 +383,14 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     color: var(--vscode-badge-foreground, #ccc);
     vertical-align: middle;
   }
+  .k8s-badge { color: #5b8def; font-size: 11px; vertical-align: middle; }
+  .version-footer {
+    text-align: center;
+    font-size: 9px;
+    opacity: 0.35;
+    padding: 6px 4px;
+    user-select: none;
+  }
   .uptime {
     display: inline-block;
     font-size: 8px;
@@ -532,6 +551,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     <span id="countLabel"></span>
     <div style="display:flex;align-items:center;gap:4px;">
       <input type="text" id="searchInput" class="search-input" placeholder="\uD83D\uDD0D Search containers..." />
+      <button id="srcBtn" title="Filter by source: All / Containers / Pods">Source: All</button>
       <button id="notifyBtn" class="${notificationsEnabled ? "active" : ""}" title="Enable automatic notifications (VRAM, container stop, idle GPU, memory leak)">\uD83D\uDD14 Alerts</button>
       <button id="groupBtn" title="Group by owner">\uD83D\uDC65 Group</button>
     </div>
@@ -559,6 +579,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     </thead>
     <tbody id="tbody"></tbody>
   </table>
+  <div class="version-footer">DevPulse v${version}</div>
 
 <script>
 (function() {
@@ -569,6 +590,7 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   let sortAsc = false;
   let grouped = false;
   let searchQuery = '';
+  let sourceFilter = 'all'; // 'all' | 'docker' | 'k8s'
   const collapsedGroups = new Set();
   let prevValues = new Map(); // track previous cell values for change detection
   let selectedIds = new Set();
@@ -647,9 +669,11 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
     const utilBarCls = utilPct > 80 ? 'red' : utilPct > 50 ? 'yellow' : 'green';
     const utilHtml = r.hasGpu ? '<span class="util-bar"><span class="util-bar-fill ' + utilBarCls + '" style="width:' + utilPct + '%"></span></span>' + utilPct.toFixed(0) + '%' : '\\u2014';
     const badge = healthBadge(r.health);
-    const nameLabel = badge + ' ' + esc(r.name);
+    const k8sBadge = r.source === 'k8s' ? '<span class="k8s-badge" title="Kubernetes pod">\\u2638</span> ' : '';
+    const nameLabel = k8sBadge + badge + ' ' + esc(r.name);
     const uptimeHtml = r.uptime ? '<span class="uptime">' + esc(r.uptime) + '</span>' : '';
-    const composeHtml = r.composeProject ? '<span class="compose-tag">' + esc(r.composeProject) + '</span>' : '';
+    const nsHtml = r.namespace ? '<span class="compose-tag" title="namespace">' + esc(r.namespace) + '</span>' : '';
+    const composeHtml = r.composeProject ? '<span class="compose-tag">' + esc(r.composeProject) + '</span>' : nsHtml;
     const imgShort = r.image ? r.image.replace(/^.*\\//, '').substring(0, 24) : '';
     const tooltip = esc(r.name) + (r.image ? '\\n' + esc(r.image) : '') + (r.ports ? '\\nPorts: ' + esc(r.ports) : '') + (r.composeProject ? '\\n[' + esc(r.composeProject) + ']' : '');
     return '<tr data-id="' + esc(r.id) + '">' +
@@ -825,11 +849,15 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   }
 
   function filterRows(arr) {
-    if (!searchQuery) return arr;
-    const q = searchQuery.toLowerCase();
-    return arr.filter(r => {
-      return (r.name + ' ' + r.owner + ' ' + r.image + ' ' + r.composeProject + ' ' + r.gpuIdx + ' ' + r.ports).toLowerCase().indexOf(q) >= 0;
-    });
+    let out = arr;
+    if (sourceFilter !== 'all') out = out.filter(r => (r.source || 'docker') === sourceFilter);
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      out = out.filter(r => {
+        return (r.name + ' ' + r.owner + ' ' + r.image + ' ' + r.composeProject + ' ' + r.namespace + ' ' + r.source + ' ' + r.gpuIdx + ' ' + r.ports).toLowerCase().indexOf(q) >= 0;
+      });
+    }
+    return out;
   }
 
   function render() {
@@ -974,6 +1002,15 @@ export class ContainerTableViewProvider implements vscode.WebviewViewProvider, v
   groupBtn.addEventListener('click', () => {
     grouped = !grouped;
     groupBtn.classList.toggle('active', grouped);
+    render();
+  });
+
+  // Source filter cycle: All -> Containers -> Pods -> All
+  const srcBtn = document.getElementById('srcBtn');
+  if (srcBtn) srcBtn.addEventListener('click', () => {
+    sourceFilter = sourceFilter === 'all' ? 'docker' : sourceFilter === 'docker' ? 'k8s' : 'all';
+    srcBtn.textContent = sourceFilter === 'all' ? 'Source: All' : sourceFilter === 'docker' ? '\\uD83D\\uDC33 Containers' : '\\u2638 Pods';
+    srcBtn.classList.toggle('active', sourceFilter !== 'all');
     render();
   });
 

@@ -7,6 +7,7 @@ import { ContainerTableViewProvider } from "./views/containerTableView";
 import { GpuMonitorPanel } from "./views/webview/gpuMonitorPanel";
 import { ProcessItem, ProcessDetailItem, ContainerItem, RamProcessItem, CpuProcessItem, RamManagerItem, CpuManagerItem, DiskManagerItem } from "./views/treeItems";
 import { fmtMem, fmtUptime, fmtStartDate } from "./utils/format";
+import { execCommand } from "./utils/exec";
 import { getOutputChannel, log } from "./utils/logger";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -137,13 +138,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("gpuMonitor.stopContainer", async (item: ContainerItem) => {
       if (!(item instanceof ContainerItem)) return;
-      if (
-        (await vscode.window.showWarningMessage(`Stop container ${item.container.name}?`, { modal: true }, "Stop")) ===
-        "Stop"
-      ) {
+      const c = item.container;
+      const isK8s = c.source === "k8s";
+      const scalable = isK8s && ["Deployment", "StatefulSet"].includes(c.controllerKind || "");
+      const prompt = isK8s
+        ? scalable
+          ? `Scale ${c.controllerKind} ${c.controllerName} to 0 replicas? (stops pod ${c.name})`
+          : `Delete pod ${c.name}? It will be recreated by its controller if managed.`
+        : `Stop container ${c.name}?`;
+      const action = isK8s ? (scalable ? "Scale to 0" : "Delete Pod") : "Stop";
+      if ((await vscode.window.showWarningMessage(prompt, { modal: true }, action)) === action) {
         try {
-          await monitor.stopContainer(item.container.id);
-          vscode.window.showInformationMessage(`Stopped ${item.container.name}`);
+          await monitor.stopContainer(c.id);
+          vscode.window.showInformationMessage(isK8s ? `Stopped pod ${c.name}` : `Stopped ${c.name}`);
           monitor.refresh();
         } catch (e) {
           vscode.window.showErrorMessage(`${e}`);
@@ -155,16 +162,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("gpuMonitor.killContainer", async (item: ContainerItem) => {
       if (!(item instanceof ContainerItem)) return;
-      if (
-        (await vscode.window.showWarningMessage(
-          `Force kill ${item.container.name}? Data loss possible.`,
-          { modal: true },
-          "Force Kill",
-        )) === "Force Kill"
-      ) {
+      const c = item.container;
+      const isK8s = c.source === "k8s";
+      const prompt = isK8s
+        ? `Force-delete pod ${c.name} (--grace-period=0 --force)? Data loss possible.`
+        : `Force kill ${c.name}? Data loss possible.`;
+      if ((await vscode.window.showWarningMessage(prompt, { modal: true }, "Force Kill")) === "Force Kill") {
         try {
-          await monitor.killContainer(item.container.id);
-          vscode.window.showInformationMessage(`Killed ${item.container.name}`);
+          await monitor.killContainer(c.id);
+          vscode.window.showInformationMessage(`Killed ${c.name}`);
           monitor.refresh();
         } catch (e) {
           vscode.window.showErrorMessage(`${e}`);
@@ -177,16 +183,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("gpuMonitor.restartContainer", async (item: ContainerItem) => {
       if (!(item instanceof ContainerItem)) return;
-      if (
-        (await vscode.window.showWarningMessage(
-          `Restart container ${item.container.name}?`,
-          { modal: true },
-          "Restart",
-        )) === "Restart"
-      ) {
+      const c = item.container;
+      const isK8s = c.source === "k8s";
+      const managed = isK8s && ["Deployment", "StatefulSet", "DaemonSet"].includes(c.controllerKind || "");
+      const prompt = isK8s
+        ? managed
+          ? `Rollout restart ${c.controllerKind} ${c.controllerName} (namespace ${c.namespace})?`
+          : `Delete pod ${c.name} to restart it? (unmanaged pod — won't be recreated)`
+        : `Restart container ${c.name}?`;
+      const action = isK8s && !managed ? "Delete Pod" : "Restart";
+      if ((await vscode.window.showWarningMessage(prompt, { modal: true }, action)) === action) {
         try {
-          await monitor.restartContainer(item.container.id);
-          vscode.window.showInformationMessage(`Restarted ${item.container.name}`);
+          await monitor.restartContainer(c.id);
+          vscode.window.showInformationMessage(`Restarted ${c.name}`);
           monitor.refresh();
         } catch (e) {
           vscode.window.showErrorMessage(`${e}`);
@@ -195,13 +204,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
+  // Build a runtime-appropriate logs/exec/attach command for the given container/pod.
+  const podParts = (id: string) => {
+    // id = "k8s:<ns>/<name>"
+    const rest = id.slice(4);
+    const slash = rest.indexOf("/");
+    return { ns: rest.substring(0, slash), name: rest.substring(slash + 1) };
+  };
+  const kubectlBin = () => vscode.workspace.getConfiguration("dockerMonitor").get<string>("kubectlBinary", "") || "kubectl";
+
+  // Fetch the container names of a pod (for multi-container exec/logs pickers).
+  const podContainers = async (ns: string, name: string): Promise<string[]> => {
+    try {
+      const { stdout } = await execCommand(
+        `${kubectlBin()} get pod ${name} -n ${ns} -o jsonpath='{.spec.containers[*].name}' --request-timeout=6s`,
+        { timeout: 9000 },
+      );
+      return stdout.trim().replace(/'/g, "").split(/\s+/).filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+  // If a pod has more than one container, ask which one; otherwise return the only/none.
+  const pickContainer = async (ns: string, name: string, action: string): Promise<string | undefined | null> => {
+    const containers = await podContainers(ns, name);
+    if (containers.length <= 1) return containers[0] ?? "";
+    const picked = await vscode.window.showQuickPick(containers, { placeHolder: `Container to ${action} in ${name}` });
+    return picked === undefined ? null : picked; // null = user cancelled
+  };
+
   // ── Container logs ──────────────────────────────────────────────
   context.subscriptions.push(
     vscode.commands.registerCommand("gpuMonitor.showContainerLogs", async (item: ContainerItem) => {
       if (!(item instanceof ContainerItem)) return;
-      const terminal = vscode.window.createTerminal(`Logs: ${item.container.name}`);
-      terminal.sendText(`docker logs -f --tail 100 ${item.container.id}`);
-      terminal.show();
+      const c = item.container;
+      if (c.source === "k8s") {
+        const { ns, name } = podParts(c.id);
+        const containers = await podContainers(ns, name);
+        let cFlag = "--all-containers";
+        if (containers.length > 1) {
+          const picked = await vscode.window.showQuickPick(["All containers", ...containers], { placeHolder: `Logs for ${name}` });
+          if (picked === undefined) return;
+          cFlag = picked === "All containers" ? "--all-containers" : `-c ${picked}`;
+        }
+        const terminal = vscode.window.createTerminal(`Logs: ${c.name}`);
+        terminal.sendText(`${kubectlBin()} logs -f --tail 100 -n ${ns} ${name} ${cFlag}`);
+        terminal.show();
+      } else {
+        const terminal = vscode.window.createTerminal(`Logs: ${c.name}`);
+        terminal.sendText(`docker logs -f --tail 100 ${c.id}`);
+        terminal.show();
+      }
     }),
   );
 
@@ -210,22 +263,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("gpuMonitor.execContainer", async (itemOrId: ContainerItem | string, nameArg?: string) => {
       let containerId: string;
       let containerName: string;
+      let source: "docker" | "k8s" = "docker";
       if (itemOrId instanceof ContainerItem) {
         containerId = itemOrId.container.id;
         containerName = itemOrId.container.name;
+        source = itemOrId.container.source === "k8s" ? "k8s" : "docker";
       } else if (typeof itemOrId === "string") {
         containerId = itemOrId;
         containerName = nameArg || itemOrId;
+        source = containerId.startsWith("k8s:") ? "k8s" : "docker";
       } else {
         return;
       }
-      const terminal = vscode.window.createTerminal(`Exec: ${containerName}`);
-      terminal.sendText(`docker exec -it ${containerId} /bin/bash || docker exec -it ${containerId} /bin/sh`);
-      terminal.show();
+      if (source === "k8s") {
+        const { ns, name } = podParts(containerId);
+        const c = await pickContainer(ns, name, "exec");
+        if (c === null) return; // cancelled
+        const cFlag = c ? ` -c ${c}` : "";
+        const terminal = vscode.window.createTerminal(`Exec: ${containerName}`);
+        terminal.sendText(`${kubectlBin()} exec -it -n ${ns} ${name}${cFlag} -- /bin/bash || ${kubectlBin()} exec -it -n ${ns} ${name}${cFlag} -- /bin/sh`);
+        terminal.show();
+      } else {
+        const terminal = vscode.window.createTerminal(`Exec: ${containerName}`);
+        terminal.sendText(`docker exec -it ${containerId} /bin/bash || docker exec -it ${containerId} /bin/sh`);
+        terminal.show();
+      }
     }),
   );
 
-  // ── Attach to container ────────────────────────────────────────
+  // ── Attach to container (docker only — no kubectl equivalent) ───
   context.subscriptions.push(
     vscode.commands.registerCommand("gpuMonitor.attachContainer", async (itemOrId: ContainerItem | string, nameArg?: string) => {
       let containerId: string;
@@ -239,10 +305,148 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else {
         return;
       }
+      if (containerId.startsWith("k8s:")) {
+        vscode.window.showInformationMessage("Attach is not available for Kubernetes pods. Use Exec or Logs instead.");
+        return;
+      }
       const terminal = vscode.window.createTerminal(`Attach: ${containerName}`);
       terminal.sendText(`docker attach ${containerId}`);
       terminal.show();
     }),
+  );
+
+  // ── Describe pod (Kubernetes only) ─────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.describePod", async (item: ContainerItem) => {
+      if (!(item instanceof ContainerItem) || item.container.source !== "k8s") return;
+      const { ns, name } = podParts(item.container.id);
+      const terminal = vscode.window.createTerminal(`Describe: ${name}`);
+      terminal.sendText(`${kubectlBin()} describe pod ${name} -n ${ns}`);
+      terminal.show();
+    }),
+  );
+
+  // ── View pod YAML in an editor ─────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.podYaml", async (item: ContainerItem) => {
+      if (!(item instanceof ContainerItem) || item.container.source !== "k8s") return;
+      const { ns, name } = podParts(item.container.id);
+      try {
+        const { stdout } = await execCommand(`${kubectlBin()} get pod ${name} -n ${ns} -o yaml --request-timeout=8s`, {
+          timeout: 12000,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+        const doc = await vscode.workspace.openTextDocument({ content: stdout, language: "yaml" });
+        await vscode.window.showTextDocument(doc, { preview: true });
+      } catch (e) {
+        vscode.window.showErrorMessage(`${e}`);
+      }
+    }),
+  );
+
+  // ── Edit pod live (kubectl edit) ───────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.podEdit", async (item: ContainerItem) => {
+      if (!(item instanceof ContainerItem) || item.container.source !== "k8s") return;
+      const c = item.container;
+      const { ns, name } = podParts(c.id);
+      // Prefer editing the owning controller when present (edits survive pod restarts)
+      const target = c.controllerKind && c.controllerName
+        ? `${c.controllerKind.toLowerCase()}/${c.controllerName}`
+        : `pod/${name}`;
+      const terminal = vscode.window.createTerminal(`Edit: ${name}`);
+      terminal.sendText(`${kubectlBin()} edit ${target} -n ${ns}`);
+      terminal.show();
+    }),
+  );
+
+  // ── Pod events ─────────────────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.podEvents", async (item: ContainerItem) => {
+      if (!(item instanceof ContainerItem) || item.container.source !== "k8s") return;
+      const { ns, name } = podParts(item.container.id);
+      const terminal = vscode.window.createTerminal(`Events: ${name}`);
+      terminal.sendText(
+        `${kubectlBin()} get events -n ${ns} --field-selector involvedObject.name=${name} --sort-by=.lastTimestamp`,
+      );
+      terminal.show();
+    }),
+  );
+
+  // ── Scale the pod's workload (start / stop / set replicas) ─────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.scaleWorkload", async (item: ContainerItem) => {
+      if (!(item instanceof ContainerItem) || item.container.source !== "k8s") return;
+      const c = item.container;
+      const { ns } = podParts(c.id);
+      if (!c.controllerKind || !c.controllerName || !["Deployment", "StatefulSet", "ReplicaSet"].includes(c.controllerKind)) {
+        vscode.window.showWarningMessage(`Scaling is not supported for ${c.controllerKind || "bare pods"}.`);
+        return;
+      }
+      const input = await vscode.window.showInputBox({
+        prompt: `Replicas for ${c.controllerKind} ${c.controllerName} (0 = stop)`,
+        value: "1",
+        validateInput: (v) => (/^\d+$/.test(v.trim()) ? undefined : "Enter a non-negative integer"),
+      });
+      if (input === undefined) return;
+      const replicas = parseInt(input.trim());
+      try {
+        await execCommand(
+          `${kubectlBin()} scale ${c.controllerKind.toLowerCase()}/${c.controllerName} --replicas=${replicas} -n ${ns} --request-timeout=15s`,
+          { timeout: 20000 },
+        );
+        vscode.window.showInformationMessage(`Scaled ${c.controllerName} to ${replicas} replica(s)`);
+        monitor.refresh();
+      } catch (e) {
+        vscode.window.showErrorMessage(`${e}`);
+      }
+    }),
+  );
+
+  // ── Copy pod namespace/name ────────────────────────────────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gpuMonitor.copyPodName", async (item: ContainerItem) => {
+      if (!(item instanceof ContainerItem)) return;
+      const c = item.container;
+      const text = c.source === "k8s" ? `${c.namespace}/${c.name}` : c.name;
+      await vscode.env.clipboard.writeText(text);
+      vscode.window.showInformationMessage(`Copied: ${text}`);
+    }),
+  );
+
+  // ── Port-forward a pod port and open it in the browser ─────────
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "gpuMonitor.podPortForward",
+      async (podId: string, port: number, podName?: string, namespace?: string) => {
+        if (!podId || !port) return;
+        let ns = namespace;
+        let name = podName;
+        if (!ns || !name) {
+          const p = podParts(podId);
+          ns = ns || p.ns;
+          name = name || p.name;
+        }
+        // Let the user pick a local port (defaults to the same as the container port)
+        const input = await vscode.window.showInputBox({
+          prompt: `Local port for ${ns}/${name} → pod port ${port}`,
+          value: String(port),
+          validateInput: (v) => (/^\d+$/.test(v.trim()) && +v > 0 && +v < 65536 ? undefined : "Enter a valid port"),
+        });
+        if (!input) return;
+        const localPort = parseInt(input.trim());
+        const terminal = vscode.window.createTerminal(`Port-forward: ${name}:${port}`);
+        terminal.sendText(`${kubectlBin()} port-forward -n ${ns} pod/${name} ${localPort}:${port}`);
+        terminal.show();
+        const action = await vscode.window.showInformationMessage(
+          `Port-forward started: localhost:${localPort} → ${ns}/${name}:${port}`,
+          "Open in Browser",
+        );
+        if (action === "Open in Browser") {
+          await vscode.env.openExternal(vscode.Uri.parse(`http://localhost:${localPort}`));
+        }
+      },
+    ),
   );
 
   // ── Copy process info ────────────────────────────────────────────
@@ -411,29 +615,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       const items = containers.map((c) => ({
-        label: `$(package) ${c.name}`,
-        description: `${c.ownerName}${c.composeProject ? ` · ${c.composeProject}` : ""}${c.uptime ? ` · ${c.uptime}` : ""}`,
+        label: `${c.source === "k8s" ? "$(symbol-namespace)" : "$(package)"} ${c.name}`,
+        description: `${c.source === "k8s" ? `☸ ${c.namespace} · ` : ""}${c.ownerName}${c.composeProject ? ` · ${c.composeProject}` : ""}${c.uptime ? ` · ${c.uptime}` : ""}`,
         containerId: c.id,
         containerName: c.name,
       }));
       const selected = await vscode.window.showQuickPick(items, { placeHolder: "Select container..." });
       if (!selected) return;
-      const actions = await vscode.window.showQuickPick(
-        [
-          { label: "$(terminal) Exec", action: "exec" },
-          { label: "$(output) Logs", action: "logs" },
-          { label: "$(plug) Attach", action: "attach" },
-          { label: "$(debug-stop) Stop", action: "stop" },
-          { label: "$(debug-restart) Restart", action: "restart" },
-        ],
-        { placeHolder: `Action for ${selected.containerName}` },
-      );
-      if (!actions) return;
       const id = selected.containerId, name = selected.containerName;
+      const isK8s = id.startsWith("k8s:");
+      const actionList = [
+        { label: "$(terminal) Exec", action: "exec" },
+        { label: "$(output) Logs", action: "logs" },
+      ];
+      if (!isK8s) actionList.push({ label: "$(plug) Attach", action: "attach" });
+      actionList.push({ label: "$(debug-stop) Stop", action: "stop" });
+      actionList.push({ label: "$(debug-restart) Restart", action: "restart" });
+      const actions = await vscode.window.showQuickPick(actionList, { placeHolder: `Action for ${name}` });
+      if (!actions) return;
       if (actions.action === "exec") vscode.commands.executeCommand("gpuMonitor.execContainer", id, name);
       else if (actions.action === "logs") {
         const terminal = vscode.window.createTerminal(`Logs: ${name}`);
-        terminal.sendText(`docker logs -f --tail 100 ${id}`);
+        if (isK8s) {
+          const rest = id.slice(4); const slash = rest.indexOf("/");
+          terminal.sendText(`${kubectlBin()} logs -f --tail 100 -n ${rest.substring(0, slash)} ${rest.substring(slash + 1)} --all-containers`);
+        } else {
+          terminal.sendText(`docker logs -f --tail 100 ${id}`);
+        }
         terminal.show();
       }
       else if (actions.action === "attach") vscode.commands.executeCommand("gpuMonitor.attachContainer", id, name);

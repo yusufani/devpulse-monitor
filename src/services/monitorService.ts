@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as os from "os";
 import { SystemInfo, GpuData, ContainerFullInfo, ContainerInspect, MonitorData, DirUsage } from "../types";
-import { ISystemCollector, IGpuCollector, IDockerCollector } from "../collectors/interfaces";
+import { ISystemCollector, IGpuCollector, IContainerCollector } from "../collectors/interfaces";
 import { computeDiskUsers } from "../collectors/diskUsage";
 import { fmtMem } from "../utils/format";
 import { log, logDebug } from "../utils/logger";
@@ -36,7 +36,7 @@ export class MonitorService implements vscode.Disposable {
   constructor(
     private systemCollector: ISystemCollector,
     private gpuCollector: IGpuCollector,
-    private dockerCollector: IDockerCollector,
+    private dockerCollector: IContainerCollector,
   ) {
     this.gpuEnabled = vscode.workspace.getConfiguration("dockerMonitor").get<boolean>("gpuMonitoring", true);
   }
@@ -74,12 +74,14 @@ export class MonitorService implements vscode.Disposable {
         this.containers = containers;
         // getContainerNames returns cached data from getAllRunningContainers above — no extra docker ps call
         const containerNameMap = await this.dockerCollector.getContainerNames();
+        // Pod index (k8s) — remaps container ids to their parent pod for attribution
+        const podIndex = this.dockerCollector.getPodIndex ? await this.dockerCollector.getPodIndex() : undefined;
         // System info — RAM/disk breakdowns only collected while their sections are expanded
         this.system = await this.systemCollector.collect(containerNameMap, {
           ram: this.wantRam,
           cpu: this.wantCpu,
           disk: this.wantDisk,
-        });
+        }, podIndex);
         // Attach the cached disk-user breakdown; (re)compute it in the background if needed
         this.system.diskUsers = this.diskUsers;
         this.maybeComputeDiskUsers();
@@ -89,7 +91,7 @@ export class MonitorService implements vscode.Disposable {
           try {
             const [gpus, processes, containerStats] = await Promise.all([
               this.gpuCollector.collectGpus(),
-              this.gpuCollector.collectProcesses(containerNameMap),
+              this.gpuCollector.collectProcesses(containerNameMap, podIndex),
               this.dockerCollector.getContainerStats(),
             ]);
 

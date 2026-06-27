@@ -8,13 +8,13 @@
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-red?logo=github)](https://github.com/sponsors/yusufani)
 [![PayPal](https://img.shields.io/badge/PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/yusufani)
 
-Real-time system and container resource monitoring — GPU, CPU, RAM, VRAM — right in your VS Code sidebar.
+Real-time system, container, and **Kubernetes pod** resource monitoring — GPU, CPU, RAM, VRAM — right in your VS Code sidebar.
 
 **If you find DevPulse useful, please consider supporting development via [GitHub Sponsors](https://github.com/sponsors/yusufani) or [PayPal](https://paypal.me/yusufani)!**
 
 ## Why DevPulse?
 
-Working on a shared GPU server? Running dozens of containers? DevPulse gives you a live dashboard without leaving your editor. See who's using what GPU, which container is eating your RAM, and kill runaway processes — all from the sidebar.
+Working on a shared GPU server? Running dozens of containers or a **Kubernetes / k3s cluster**? DevPulse gives you a live dashboard without leaving your editor. See who's using what GPU, which container *or pod* is eating your RAM, attribute GPU processes to the exact pod, and manage them — all from the sidebar.
 
 ## Features
 <img alt="image" src="https://github.com/user-attachments/assets/96ec3218-b9de-4ba2-8a08-a61636fc1cc2" style="max-width: 100%; height: auto;" />
@@ -45,6 +45,14 @@ Right-click any container in the sidebar for a full set of actions:
 - **Show Environment Variables** — view all env vars set in the container
 - **Show Volume Mounts** — inspect bind mounts and volumes
 - **Copy Container ID / Name / Image** — quick copy to clipboard
+
+### Kubernetes / k3s Support
+DevPulse monitors **Kubernetes pods alongside Docker containers** — no separate tool needed. Works with any `kubectl`-reachable cluster (k3s, k8s, etc.).
+- **Pods in the Container Resources table** — pods appear next to Docker containers with a ☸ badge and namespace, showing CPU/RAM (via `kubectl top` / metrics-server). Use the **Source** toggle to filter All / Containers / Pods.
+- **GPU → pod attribution** — GPU processes running inside pods are attributed to the exact `namespace/pod`, just like containers (matches container cgroups to pod IDs).
+- **Pod Manager sidebar section** — pods grouped by namespace. Expand a pod to see its ports and **start a `kubectl port-forward`** to open them in your browser.
+- **Pod actions** — Restart (`rollout restart` for managed workloads), Stop (`scale --replicas=0`), Force-delete, Logs, Exec, and Describe — right-click any pod.
+- **Node-scoped by default** — shows only pods running on this machine (so GPU/process attribution works); switch to cluster-wide with `dockerMonitor.kubernetes.scope`. Auto-disables when `kubectl` is missing or the cluster is unreachable.
 
 ### Smart Alerts (Opt-in)
 All notifications are **disabled by default**. Enable them with the **Alerts** toggle button in the container table toolbar. Once enabled, DevPulse watches for:

@@ -168,6 +168,7 @@ export class DockerCollector implements IDockerCollector {
           uptime,
           image,
           ports: portsRaw,
+          source: "docker",
         });
       }
       this.lastContainerList = results;

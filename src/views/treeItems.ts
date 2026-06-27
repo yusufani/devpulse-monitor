@@ -95,6 +95,10 @@ export type SidebarItem =
   | DiskManagerItem
   | DiskMountItem
   | DiskUserItem
+  | PodManagerItem
+  | PodNamespaceItem
+  | PodItem
+  | PodPortItem
   | InfoItem
   | OpenMonitorItem
   | ErrorItem;
@@ -235,16 +239,20 @@ export class ContainerItem extends vscode.TreeItem {
     public readonly gpuProcCount: number,
     stats?: ContainerStats,
   ) {
+    const isK8s = container.source === "k8s";
     // Health badge in label
     const healthBadge = container.health === "healthy" ? " \u2705"
       : container.health === "unhealthy" ? " \u274C"
       : container.health === "starting" ? " \u23F3"
       : "";
+    // Kubernetes pods get a \u2638 prefix so they're distinguishable from docker containers
+    const sourcePrefix = isK8s ? "\u2638 " : "";
     super(
-      container.name + healthBadge,
+      sourcePrefix + container.name + healthBadge,
       gpuProcCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
     );
     const parts: string[] = [];
+    if (isK8s && container.namespace) parts.push(container.namespace);
     if (gpuVram > 0) parts.push(`VRAM ${fmtMem(gpuVram)}`);
     if (stats) {
       parts.push(`CPU ${stats.cpuPercent.toFixed(1)}%`);
@@ -256,11 +264,17 @@ export class ContainerItem extends vscode.TreeItem {
     const hasGpu = gpuVram > 0;
     const iconColor = container.health === "unhealthy" ? "errorForeground"
       : hasGpu ? "terminal.ansiCyan"
+      : isK8s ? "terminal.ansiBlue"
       : "terminal.ansiGreen";
     this.iconPath = new vscode.ThemeIcon("package", new vscode.ThemeColor(iconColor));
-    this.contextValue = "gpuContainer";
+    this.contextValue = isK8s ? "k8sPod" : "gpuContainer";
 
-    const tooltipParts = [`${container.name}`, `Owner: ${container.ownerName}`];
+    const tooltipParts = isK8s
+      ? [`${container.namespace}/${container.name}`, `Namespace: ${container.ownerName}`]
+      : [`${container.name}`, `Owner: ${container.ownerName}`];
+    if (isK8s && container.node) tooltipParts.push(`Node: ${container.node}`);
+    if (isK8s && container.podPhase) tooltipParts.push(`Phase: ${container.podPhase}`);
+    if (isK8s && container.controllerKind) tooltipParts.push(`Controller: ${container.controllerKind}/${container.controllerName}`);
     if (container.composeProject) tooltipParts.push(`Compose: ${container.composeProject}`);
     if (container.health !== "none") tooltipParts.push(`Health: ${container.health}`);
     if (container.uptime) tooltipParts.push(`Uptime: ${container.uptime}`);
@@ -572,6 +586,85 @@ export class DiskUserItem extends vscode.TreeItem {
     this.description = `${fmtGib(usage.sizeGib)}${share > 0 ? ` · ${share}% of used` : ""}`;
     this.iconPath = new vscode.ThemeIcon("folder", new vscode.ThemeColor(getUserColor(usage.name)));
     this.tooltip = `${usage.path}\nSize: ${fmtGib(usage.sizeGib)}`;
+  }
+}
+
+// ── Pod Manager Tree Items (Kubernetes) ───────────────────────────
+
+/** Root "Pod Manager" section — Kubernetes pods grouped by namespace. */
+export class PodManagerItem extends vscode.TreeItem {
+  constructor(podCount: number, nsCount: number) {
+    super("Pod Manager", vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = "podManager"; // stable id so expand state persists across refreshes
+    this.description = `${podCount} pod${podCount !== 1 ? "s" : ""} · ${nsCount} ns`;
+    this.iconPath = new vscode.ThemeIcon("symbol-namespace", new vscode.ThemeColor("terminal.ansiBlue"));
+    this.tooltip = "Kubernetes pods on this node\nExpand to start port-forwards, restart, view logs/exec";
+  }
+}
+
+/** A namespace grouping under Pod Manager — expands to its pods. */
+export class PodNamespaceItem extends vscode.TreeItem {
+  constructor(
+    public readonly namespace: string,
+    podCount: number,
+  ) {
+    super(namespace, vscode.TreeItemCollapsibleState.Collapsed);
+    this.description = `${podCount} pod${podCount !== 1 ? "s" : ""}`;
+    this.iconPath = new vscode.ThemeIcon("folder", new vscode.ThemeColor(getUserColor(namespace)));
+    this.contextValue = "podNamespace";
+    this.tooltip = `Namespace: ${namespace}\nPods: ${podCount}`;
+  }
+}
+
+/** A single pod under Pod Manager — expands to its exposed ports (port-forward). */
+export class PodItem extends vscode.TreeItem {
+  constructor(
+    public readonly container: ContainerFullInfo,
+    stats?: ContainerStats,
+  ) {
+    const healthBadge = container.health === "unhealthy" ? " ❌"
+      : container.health === "starting" ? " ⏳"
+      : "";
+    const portList = container.ports ? container.ports.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    super(
+      container.name + healthBadge,
+      portList.length > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+    );
+    const parts: string[] = [];
+    if (container.podPhase) parts.push(container.podPhase);
+    if (stats) {
+      parts.push(`CPU ${stats.cpuPercent.toFixed(1)}%`);
+      parts.push(`RAM ${fmtMem(stats.memUsedMib)}`);
+    }
+    if (portList.length > 0) parts.push(`:${portList.join(",")}`);
+    if (container.uptime) parts.push(container.uptime);
+    this.description = parts.join(" · ");
+    const phaseColor = container.health === "unhealthy" ? "errorForeground"
+      : container.podPhase === "Pending" ? "editorWarning.foreground"
+      : "terminal.ansiBlue";
+    this.iconPath = new vscode.ThemeIcon("package", new vscode.ThemeColor(phaseColor));
+    this.contextValue = "k8sPod"; // reuse the pod inline/context menus (restart, stop, logs, exec, describe)
+    const tip = [`${container.namespace}/${container.name}`];
+    if (container.node) tip.push(`Node: ${container.node}`);
+    if (container.controllerKind) tip.push(`Controller: ${container.controllerKind}/${container.controllerName}`);
+    if (portList.length > 0) tip.push(`Ports: ${portList.join(", ")}`);
+    this.tooltip = tip.join("\n");
+  }
+}
+
+/** A single exposed pod port — click to start a kubectl port-forward and open it. */
+export class PodPortItem extends vscode.TreeItem {
+  constructor(podId: string, podName: string, namespace: string, port: number) {
+    super(`Port ${port}`, vscode.TreeItemCollapsibleState.None);
+    this.description = "port-forward → open in browser";
+    this.iconPath = new vscode.ThemeIcon("plug", new vscode.ThemeColor("terminal.ansiGreen"));
+    this.contextValue = "podPort";
+    this.tooltip = `kubectl port-forward ${port} (${namespace}/${podName})`;
+    this.command = {
+      command: "gpuMonitor.podPortForward",
+      title: "Port Forward",
+      arguments: [podId, port, podName, namespace],
+    };
   }
 }
 

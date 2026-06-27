@@ -102,6 +102,19 @@ export interface ContainerFullInfo {
   uptime: string;
   image: string;
   ports: string;
+  /** Which runtime this row comes from. Defaults to "docker" for backward compatibility. */
+  source?: "docker" | "k8s";
+  // ── Kubernetes-only fields (undefined for docker rows) ──
+  /** Pod namespace */
+  namespace?: string;
+  /** Node the pod is scheduled on (spec.nodeName) */
+  node?: string;
+  /** Owning controller kind: Deployment | DaemonSet | StatefulSet | ReplicaSet | Job | "" (bare pod) */
+  controllerKind?: string;
+  /** Owning controller name (used for `kubectl rollout restart` / `scale`) */
+  controllerName?: string;
+  /** Pod phase: Running | Pending | Succeeded | Failed | Unknown */
+  podPhase?: string;
 }
 
 export interface GpuData {

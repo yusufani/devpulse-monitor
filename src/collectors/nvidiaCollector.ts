@@ -1,10 +1,11 @@
 import { readFileSync } from "fs";
 import { execSync } from "child_process";
-import { IGpuCollector } from "./interfaces";
+import { IGpuCollector, PodIndex } from "./interfaces";
 import { GpuInfo, GpuProcess } from "../types";
 import { findBinary, execCommand } from "../utils/exec";
 import { detectPlatform } from "../utils/platform";
 import { log, logDebug } from "../utils/logger";
+import { resolveContainerFromPid } from "./containerResolver";
 
 function readProcFile(filePath: string): string {
   try {
@@ -56,34 +57,8 @@ async function resolveUidAsync(uid: number): Promise<string> {
 }
 
 // ── /proc-based resolution (works on host) ─────────────────────
-
-function resolveContainerFromProc(
-  pid: number,
-  cnameMap: Map<string, string>,
-): { id: string; name: string } {
-  try {
-    const cgroup = readProcFile(`/proc/${pid}/cgroup`);
-    let cid = "";
-    for (const segment of cgroup.split(/[/\n]/)) {
-      const s = segment.trim();
-      if (s.length === 64 && /^[0-9a-f]+$/.test(s)) {
-        cid = s.substring(0, 12);
-        break;
-      }
-      if (s.startsWith("docker-") && s.endsWith(".scope")) {
-        const inner = s.slice(7, -6);
-        if (inner.length === 64) {
-          cid = inner.substring(0, 12);
-          break;
-        }
-      }
-    }
-    if (!cid) return { id: "", name: "host" };
-    return { id: cid, name: cnameMap.get(cid) || cid };
-  } catch {
-    return { id: "", name: "host" };
-  }
-}
+// Container/pod attribution from /proc/<pid>/cgroup lives in containerResolver.ts
+// (shared with the host-process path in linuxSystem.ts).
 
 // Boot time cache — read once from /proc/stat
 let _bootTimeMs: number | null = null;
@@ -358,7 +333,7 @@ export class NvidiaCollector implements IGpuCollector {
     return gpus;
   }
 
-  async collectProcesses(containerNameMap: Map<string, string>): Promise<GpuProcess[]> {
+  async collectProcesses(containerNameMap: Map<string, string>, podIndex?: PodIndex): Promise<GpuProcess[]> {
     if (!this.smiPath) return [];
     const processes: GpuProcess[] = [];
 
@@ -399,7 +374,7 @@ export class NvidiaCollector implements IGpuCollector {
       if (this._procAccessible) {
         // Fast path: direct /proc access
         const detailPromises = rawProcs.map(async (r) => {
-          const container = resolveContainerFromProc(r.pid, containerNameMap);
+          const container = resolveContainerFromPid(r.pid, containerNameMap, podIndex);
           const detail = getProcessDetailFromProc(r.pid);
           const username = detail.uid >= 0 ? await resolveUidAsync(detail.uid) : "?";
           return {

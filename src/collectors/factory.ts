@@ -1,6 +1,7 @@
+import * as vscode from "vscode";
 import { detectPlatform } from "../utils/platform";
 import { log } from "../utils/logger";
-import { ISystemCollector, IGpuCollector, IDockerCollector } from "./interfaces";
+import { ISystemCollector, IGpuCollector, IContainerCollector } from "./interfaces";
 import { LinuxSystemCollector } from "./linuxSystem";
 import { DarwinSystemCollector } from "./darwinSystem";
 import { NvidiaCollector } from "./nvidiaCollector";
@@ -8,11 +9,14 @@ import { RocmCollector } from "./rocmCollector";
 import { AppleGpuCollector } from "./appleGpuCollector";
 import { NullGpuCollector } from "./nullGpuCollector";
 import { DockerCollector } from "./dockerCollector";
+import { KubernetesCollector } from "./kubernetesCollector";
+import { ContainerAggregator } from "./containerAggregator";
 
 export interface Collectors {
   system: ISystemCollector;
   gpu: IGpuCollector;
-  docker: IDockerCollector;
+  /** Aggregated container/pod source (Docker + Kubernetes). */
+  docker: IContainerCollector;
 }
 
 export async function createCollectors(): Promise<Collectors> {
@@ -48,10 +52,34 @@ export async function createCollectors(): Promise<Collectors> {
     }
   }
 
-  // Docker collector
-  const docker = new DockerCollector();
-  const dockerAvailable = await docker.isAvailable();
-  log(`Docker available: ${dockerAvailable}`);
+  // Container sources — Docker and/or Kubernetes, aggregated into one
+  const cfg = vscode.workspace.getConfiguration("dockerMonitor");
+  const sources: IContainerCollector[] = [];
 
-  return { system, gpu, docker };
+  const docker = new DockerCollector();
+  if (await docker.isAvailable()) {
+    sources.push(docker);
+    log("Container source: Docker");
+  }
+
+  if (cfg.get<boolean>("kubernetes.enabled", true)) {
+    const k8s = new KubernetesCollector({
+      scope: cfg.get<"node" | "cluster">("kubernetes.scope", "node"),
+      namespaces: cfg.get<string[]>("kubernetes.namespaces", []),
+      kubectlBinary: cfg.get<string>("kubectlBinary", ""),
+    });
+    try {
+      if (await k8s.isAvailable()) {
+        sources.push(k8s);
+        log(`Container source: Kubernetes (scope=${cfg.get("kubernetes.scope", "node")})`);
+      }
+    } catch (e) {
+      log(`Kubernetes probe failed: ${e}`);
+    }
+  }
+
+  log(`Container sources active: ${sources.length}`);
+  const containers = new ContainerAggregator(sources);
+
+  return { system, gpu, docker: containers };
 }

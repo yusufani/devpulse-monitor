@@ -4,7 +4,11 @@ VS Code extension for real-time GPU, CPU, RAM, and Docker container monitoring.
 
 ## Build & Test Workflow
 
-After making changes, always build, package, install, and test locally before pushing:
+**Easiest:** run `./scripts/deploy.sh` — it auto-bumps the patch version (so the build
+is always higher than what's installed), compiles, packages, removes any older installed
+copies, and installs onto the running Stable server. Then reload the window.
+
+Manual steps (if you need finer control):
 
 ```bash
 # 1. Compile
@@ -17,8 +21,16 @@ npx vsce package --no-dependencies
 VSCODE_AGENT_FOLDER=/tier01/data/labhome/yani/vscode-server-fix/.vscode-server \
   /tier01/data/labhome/yani/vscode-server-fix/.vscode-server/cli/servers/Stable-8761a5560cfd65fdd19ce7e2bd18dab5c0a4d84e/server/bin/code-server --install-extension devpulse-monitor-*.vsix
 
-# 4. User reloads window: Ctrl+Shift+P -> Developer: Reload Window
+# 4. User restarts the extension host: Ctrl+Shift+P -> Developer: Restart Extension Host
+#    (a plain "Reload Window" sometimes keeps the OLD extension host warm, so the
+#     new build appears installed but the running code doesn't change. A version
+#     footer is shown at the bottom of both DevPulse panels to confirm the live build.)
 ```
+
+**Heads-up — the server commit hash changes:** VS Code Server self-updates, so the
+`cli/servers/Stable-<hash>/` path drifts (it was `8761a55…`, now `fcf6047…`). The
+hardcoded one-liner below can go stale. Prefer `./scripts/deploy.sh`, which detects the
+*running* server binary from its process instead of hardcoding the commit.
 
 **Important — which server is actually running:** The user runs the **Stable** server at `vscode-server-fix/.vscode-server`, launched with `VSCODE_AGENT_FOLDER` pointing there. The `code-server` CLI defaults its extensions dir to `~/.vscode-server/extensions` (empty / root-owned here), so you MUST pass `VSCODE_AGENT_FOLDER=.../vscode-server-fix/.vscode-server` or the install fails with "Unable to resolve nonexistent file '.../.vscode-server/extensions'". The old Insiders path (`.vscode-server-insiders/.../code-server-insiders`) installs to a server that is NOT running — extensions land there but the user never sees them. To find the live server + folder: `pgrep -af extensionHost` and read its `/proc/<pid>/environ` for `VSCODE_AGENT_FOLDER`.
 

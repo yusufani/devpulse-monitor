@@ -29,6 +29,10 @@ import {
   DiskManagerItem,
   DiskMountItem,
   DiskUserItem,
+  PodManagerItem,
+  PodNamespaceItem,
+  PodItem,
+  PodPortItem,
   InfoItem,
   OpenMonitorItem,
   ErrorItem,
@@ -82,7 +86,32 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
     if (element instanceof CpuContainerItem) return this.getCpuContainerChildren(element);
     if (element instanceof DiskManagerItem) return this.getDiskChildren();
     if (element instanceof DiskMountItem) return this.getDiskMountChildren(element);
+    if (element instanceof PodManagerItem) return this.getPodManagerChildren();
+    if (element instanceof PodNamespaceItem) return this.getPodNamespaceChildren(element);
+    if (element instanceof PodItem) return this.getPodChildren(element);
     return [];
+  }
+
+  // ── Pod Manager (Kubernetes) ──────────────────────────────────
+  private getPodManagerChildren(): SidebarItem[] {
+    const pods = this.containers.filter((c) => c.source === "k8s");
+    const byNs = new Map<string, number>();
+    for (const p of pods) byNs.set(p.namespace || "default", (byNs.get(p.namespace || "default") || 0) + 1);
+    return [...byNs.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([ns, count]) => new PodNamespaceItem(ns, count));
+  }
+
+  private getPodNamespaceChildren(el: PodNamespaceItem): SidebarItem[] {
+    return this.containers
+      .filter((c) => c.source === "k8s" && (c.namespace || "default") === el.namespace)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((c) => new PodItem(c, this.containerStats.get(c.id)));
+  }
+
+  private getPodChildren(el: PodItem): SidebarItem[] {
+    const ports = el.container.ports ? el.container.ports.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    return ports.map((p) => new PodPortItem(el.container.id, el.container.name, el.container.namespace || "default", parseInt(p)));
   }
 
   private getRootItems(): SidebarItem[] {
@@ -101,6 +130,13 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
     if (cfg.get<boolean>("diskManager", true) && this.system.disks.length > 0) {
       items.push(new DiskManagerItem(this.system.disks.length));
     }
+    if (cfg.get<boolean>("podManager", true)) {
+      const pods = this.containers.filter((c) => c.source === "k8s");
+      if (pods.length > 0) {
+        const nsCount = new Set(pods.map((p) => p.namespace || "default")).size;
+        items.push(new PodManagerItem(pods.length, nsCount));
+      }
+    }
 
     if (this.gpuError && this.gpus.length === 0) {
       items.push(new ErrorItem("\u26A0 GPU error: " + this.gpuError));
@@ -118,6 +154,13 @@ export class GpuSidebarProvider implements vscode.TreeDataProvider<SidebarItem>,
     }
     for (const gpu of this.gpus) items.push(new GpuItem(gpu, this.gpuHistory));
     if (this.hasGpu) items.push(new OpenMonitorItem());
+
+    // Version footer — confirms which build is loaded
+    const version = vscode.extensions.getExtension("ANISOFT.devpulse-monitor")?.packageJSON.version ?? "?";
+    const versionItem = new InfoItem(`DevPulse v${version}`, "verified");
+    versionItem.description = "";
+    versionItem.tooltip = `DevPulse Monitor v${version}`;
+    items.push(versionItem);
     return items;
   }
 

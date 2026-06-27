@@ -1,5 +1,5 @@
 import { readFile } from "fs/promises";
-import { ISystemCollector, CollectOptions } from "./interfaces";
+import { ISystemCollector, CollectOptions, PodIndex } from "./interfaces";
 import { SystemInfo, DiskInfo, HostProcessInfo } from "../types";
 import { execCommand } from "../utils/exec";
 import { resolveContainerFromPid } from "./containerResolver";
@@ -15,7 +15,7 @@ export class LinuxSystemCollector implements ISystemCollector {
   private cachedDisks: DiskInfo[] = [];
   private diskCacheTime = 0;
 
-  async collect(containerNameMap?: Map<string, string>, opts?: CollectOptions): Promise<SystemInfo> {
+  async collect(containerNameMap?: Map<string, string>, opts?: CollectOptions, podIndex?: PodIndex): Promise<SystemInfo> {
     let cpuPercent = 0;
     try {
       const stat = await readFile("/proc/stat", "utf-8");
@@ -57,7 +57,7 @@ export class LinuxSystemCollector implements ISystemCollector {
     // A single ps call yields both rss and %cpu, so RAM and CPU share it.
     let hostProcesses: HostProcessInfo[] = [];
     if (opts?.ram || opts?.cpu) {
-      hostProcesses = await collectHostProcesses(containerNameMap ?? new Map());
+      hostProcesses = await collectHostProcesses(containerNameMap ?? new Map(), podIndex);
     }
 
     // Disk-user breakdown (du) is orchestrated by MonitorService (cancellable + progress)
@@ -73,7 +73,7 @@ export class LinuxSystemCollector implements ISystemCollector {
 }
 
 /** Read all processes via ps and attribute the largest ones to containers via /proc cgroup. */
-async function collectHostProcesses(nameMap: Map<string, string>): Promise<HostProcessInfo[]> {
+async function collectHostProcesses(nameMap: Map<string, string>, podIndex?: PodIndex): Promise<HostProcessInfo[]> {
   try {
     // comm last so the fixed-width leading columns parse cleanly
     const { stdout } = await execCommand(
@@ -97,7 +97,7 @@ async function collectHostProcesses(nameMap: Map<string, string>): Promise<HostP
       let containerName = "";
       if (resolved < RESOLVE_MAX && rssMib >= RESOLVE_MIN_RSS_MIB) {
         resolved++;
-        const c = resolveContainerFromPid(pid, nameMap);
+        const c = resolveContainerFromPid(pid, nameMap, podIndex);
         if (c.id) {
           containerId = c.id;
           containerName = c.name;

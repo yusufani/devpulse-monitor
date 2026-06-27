@@ -1,7 +1,7 @@
 {
   "name": "devpulse-monitor",
-  "displayName": "DevPulse Monitor - CPU RAM GPU Docker Monitor",
-  "description": "Real-time GPU, CPU, RAM monitoring with container resource tracking for VS Code",
+  "displayName": "DevPulse Monitor - CPU RAM GPU Docker & Kubernetes Monitor",
+  "description": "Real-time GPU, CPU, RAM monitoring with Docker container and Kubernetes pod resource tracking for VS Code",
   "icon": "images/icon.png",
   "version": "1.15.1",
   "publisher": "ANISOFT",
@@ -26,6 +26,11 @@
   "keywords": [
     "gpu",
     "docker",
+    "kubernetes",
+    "k8s",
+    "k3s",
+    "pod",
+    "kubectl",
     "monitor",
     "nvidia",
     "amd",
@@ -36,6 +41,7 @@
     "devpulse",
     "process",
     "container",
+    "orchestration",
     "resource"
   ],
   "activationEvents": [
@@ -67,6 +73,33 @@
           "type": "string",
           "default": "",
           "description": "Custom path to docker binary (auto-detected if empty)"
+        },
+        "dockerMonitor.kubectlBinary": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to kubectl binary (auto-detected if empty)"
+        },
+        "dockerMonitor.kubernetes.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Monitor Kubernetes pods alongside Docker containers (auto-disabled if kubectl is missing or the cluster is unreachable)"
+        },
+        "dockerMonitor.kubernetes.scope": {
+          "type": "string",
+          "enum": [
+            "node",
+            "cluster"
+          ],
+          "default": "node",
+          "description": "Which pods to show: 'node' = only pods with a container running on this machine (enables GPU/process attribution); 'cluster' = all pods in the cluster (informational)"
+        },
+        "dockerMonitor.kubernetes.namespaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Only show pods from these namespaces (empty = all namespaces)"
         },
         "dockerMonitor.notifyOnlyMyContainers": {
           "type": "boolean",
@@ -114,6 +147,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show the Disk Manager section in the sidebar (per-mount / per-user disk usage)"
+        },
+        "dockerMonitor.podManager": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Pod Manager section in the sidebar (Kubernetes pods grouped by namespace, with port-forward)"
         },
         "dockerMonitor.diskUsagePaths": {
           "type": "array",
@@ -209,6 +247,41 @@
         "command": "gpuMonitor.attachContainer",
         "title": "DevPulse: Attach to Container",
         "icon": "$(plug)"
+      },
+      {
+        "command": "gpuMonitor.describePod",
+        "title": "DevPulse: Describe Pod (kubectl)",
+        "icon": "$(info)"
+      },
+      {
+        "command": "gpuMonitor.podPortForward",
+        "title": "DevPulse: Port-forward Pod Port",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "gpuMonitor.podYaml",
+        "title": "DevPulse: View Pod YAML",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "gpuMonitor.podEdit",
+        "title": "DevPulse: Edit Pod / Workload (kubectl edit)",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "gpuMonitor.podEvents",
+        "title": "DevPulse: Show Pod Events",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "gpuMonitor.scaleWorkload",
+        "title": "DevPulse: Scale Workload (replicas)",
+        "icon": "$(arrow-both)"
+      },
+      {
+        "command": "gpuMonitor.copyPodName",
+        "title": "DevPulse: Copy Pod namespace/name",
+        "icon": "$(copy)"
       },
       {
         "command": "gpuMonitor.showTopConsumers",
@@ -358,6 +431,68 @@
         {
           "command": "gpuMonitor.copyContainerImage",
           "when": "view == gpuMonitor && viewItem == gpuContainer"
+        },
+        {
+          "command": "gpuMonitor.restartContainer",
+          "when": "view == gpuMonitor && viewItem == k8sPod",
+          "group": "inline"
+        },
+        {
+          "command": "gpuMonitor.stopContainer",
+          "when": "view == gpuMonitor && viewItem == k8sPod",
+          "group": "inline"
+        },
+        {
+          "command": "gpuMonitor.killContainer",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.scaleWorkload",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.showContainerLogs",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.execContainer",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.describePod",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.podYaml",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.podEdit",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.podEvents",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.copyPodName",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.showEnvVars",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.showVolumes",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.copyContainerName",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
+        },
+        {
+          "command": "gpuMonitor.copyContainerImage",
+          "when": "view == gpuMonitor && viewItem == k8sPod"
         }
       ]
     },
