@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.1](https://github.com/yusufani/devpulse-monitor/compare/v1.16.0...v1.16.1) (2026-06-27)
+
+
+### Bug Fixes
+
+* make pod monitoring and GPU process owner attribution work inside containers ([40cd062](https://github.com/yusufani/devpulse-monitor/commit/40cd062e389c83e5926aaef9941f7a83af58b287))
+
 ## [1.16.0](https://github.com/yusufani/devpulse-monitor/compare/v1.15.1...v1.16.0) (2026-06-27)
 
 
