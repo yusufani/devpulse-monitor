@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.0](https://github.com/yusufani/devpulse-monitor/compare/v1.15.1...v1.16.0) (2026-06-27)
+
+
+### Features
+
+* add Kubernetes (k3s) pod monitoring and management ([3992c05](https://github.com/yusufani/devpulse-monitor/commit/3992c057e63258eff453a2ee6650571699506e4c))
+
 ## [1.15.1](https://github.com/yusufani/devpulse-monitor/compare/v1.15.0...v1.15.1) (2026-06-25)
 
 
